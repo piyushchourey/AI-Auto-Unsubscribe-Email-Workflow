@@ -33,7 +33,7 @@ Automated unsubscribe processing system with LLM-based intent detection, built w
 ### 1. Clone and Setup
 
 ```bash
-cd d:\Projects\Unsuscribe-Email-workflow
+cd d:\Projects\AI-Auto-Unsubscribe-Email-Workflow
 python -m venv venv
 venv\Scripts\activate  # On Windows
 pip install -r requirements.txt
