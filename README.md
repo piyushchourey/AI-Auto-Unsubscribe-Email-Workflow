@@ -2,6 +2,10 @@
 
 Automated unsubscribe processing system with LLM-based intent detection, built with FastAPI, LangChain, and Brevo integration.
 
+**Made with ❤️ by [Piyush Chourey](https://github.com/piyushchourey11)**
+
+---
+
 ## 🚀 Features
 
 - **Inbound Email Webhook**: Receive emails from Outlook Power Automate
@@ -525,6 +529,15 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 ## 📄 License
 
 MIT
+
+## 👨‍💻 Author
+
+**Piyush Chourey**  
+GitHub: [@piyushchourey11](https://github.com/piyushchourey11)
+
+---
+
+*Made with ❤️ for automating email unsubscribe workflows*
 
 ## 🤝 Support
 
