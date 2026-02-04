@@ -290,7 +290,7 @@ with st.sidebar:
     st.divider()
     
     # Save configuration
-    if st.button("💾 Save Configuration", type="primary", use_container_width=True):
+    if st.button("💾 Save Configuration", type="primary", width='stretch'):
         new_env = {
             'BREVO_API_KEY': brevo_api_key,
             'LLM_PROVIDER': llm_config['provider'],
@@ -327,7 +327,7 @@ with st.sidebar:
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("🔄 Auto Restart API", use_container_width=True):
+            if st.button("🔄 Auto Restart API", width='stretch'):
                 with st.spinner("Restarting API server..."):
                     success, message = restart_api()
                     
@@ -350,7 +350,7 @@ with st.sidebar:
                         st.error(f"❌ {message}")
         
         with col2:
-            if st.button("📝 Manual Restart", use_container_width=True):
+            if st.button("📝 Manual Restart", width='stretch'):
                 st.info("""
                 **Manual restart steps:**
                 1. Stop current API (Ctrl+C in terminal)
@@ -366,7 +366,7 @@ st.title("📧 Unsubscribe Email Workflow")
 st.caption("Automated email unsubscribe processing with LLM intent detection")
 
 # Create tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🧪 Test Intent", "✉️ Test Brevo", "📝 Logs"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🧪 Test Intent", "✉️ Test Brevo", "📋 Blocklist", "📝 Logs"])
 
 # Tab 1: Dashboard
 with tab1:
@@ -408,7 +408,7 @@ with tab1:
             """)
         
         with col2:
-            if st.button("🔄 Check Emails Now", use_container_width=True):
+            if st.button("🔄 Check Emails Now", width='stretch'):
                 with st.spinner("Checking emails..."):
                     status_code, result = trigger_check_now()
                     
@@ -520,8 +520,131 @@ with tab3:
         else:
             st.warning("⚠️ Please enter an email address")
 
-# Tab 4: Activity Logs
+# Tab 4: Blocklist Management
 with tab4:
+    st.subheader("📋 Blocklist Management")
+    st.caption("View and export blocklisted users")
+    
+    # Fetch statistics
+    try:
+        stats_response = requests.get(f"{API_BASE_URL}/blocklist/stats", timeout=5)
+        if stats_response.status_code == 200:
+            stats_data = stats_response.json()
+            stats = stats_data.get('stats', {})
+            
+            # Display statistics
+            st.subheader("📊 Statistics")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Processed", stats.get('total_processed', 0))
+            
+            with col2:
+                st.metric("Intent Detected", stats.get('intent_detected_count', 0))
+            
+            with col3:
+                st.metric("Successfully Blocked", stats.get('successfully_blocklisted', 0))
+            
+            with col4:
+                st.metric("Failed", stats.get('failed_blocklist', 0))
+            
+            # Source breakdown
+            source_breakdown = stats.get('source_breakdown', {})
+            if source_breakdown:
+                st.subheader("📍 Sources")
+                cols = st.columns(len(source_breakdown))
+                for idx, (source, count) in enumerate(source_breakdown.items()):
+                    with cols[idx]:
+                        st.metric(source.title(), count)
+            
+            st.divider()
+            
+            # Recent logs section
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.subheader("📋 Recent Blocklist Entries")
+            
+            with col2:
+                limit = st.selectbox("Show entries", [10, 25, 50, 100], index=2)
+            
+            # Fetch recent logs
+            recent_response = requests.get(f"{API_BASE_URL}/blocklist/recent?limit={limit}", timeout=5)
+            if recent_response.status_code == 200:
+                recent_data = recent_response.json()
+                logs = recent_data.get('logs', [])
+                
+                if logs:
+                    # Display as dataframe
+                    import pandas as pd
+                    df = pd.DataFrame(logs)
+                    
+                    # Select and reorder columns for display
+                    display_columns = ['email', 'intent_detected', 'brevo_success', 
+                                     'intent_confidence', 'source', 'created_at']
+                    df_display = df[display_columns].copy()
+                    
+                    # Format boolean columns
+                    df_display['intent_detected'] = df_display['intent_detected'].apply(lambda x: '✅' if x else '❌')
+                    df_display['brevo_success'] = df_display['brevo_success'].apply(lambda x: '✅' if x else '❌')
+                    
+                    # Rename columns for display
+                    df_display.columns = ['Email', 'Intent', 'Blocked', 'Confidence', 'Source', 'Timestamp']
+                    
+                    st.dataframe(df_display, width='stretch', hide_index=True)
+                    
+                    # Export button
+                    st.divider()
+                    col1, col2 = st.columns([1, 1])
+                    
+                    with col1:
+                        if st.button("📥 Export All to CSV", width='stretch'):
+                            with st.spinner("Generating CSV export..."):
+                                export_response = requests.get(
+                                    f"{API_BASE_URL}/blocklist/export?successful_only=true",
+                                    timeout=10
+                                )
+                                if export_response.status_code == 200:
+                                    st.success("✅ Export completed! Download starting...")
+                                    st.download_button(
+                                        label="💾 Download CSV",
+                                        data=export_response.content,
+                                        file_name=f"blocklist_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                        mime="text/csv",
+                                        width='stretch'
+                                    )
+                                else:
+                                    st.error("❌ Export failed")
+                    
+                    with col2:
+                        # Search functionality
+                        search_email = st.text_input("🔍 Search by email", placeholder="user@example.com")
+                        if search_email:
+                            search_response = requests.get(
+                                f"{API_BASE_URL}/blocklist/search/{search_email}",
+                                timeout=5
+                            )
+                            if search_response.status_code == 200:
+                                search_data = search_response.json()
+                                results = search_data.get('results', [])
+                                if results:
+                                    st.success(f"Found {len(results)} result(s)")
+                                    st.json(results)
+                                else:
+                                    st.info("No results found")
+                else:
+                    st.info("📭 No blocklist entries yet")
+            else:
+                st.error("❌ Failed to fetch recent logs")
+        else:
+            st.error("❌ Failed to fetch statistics")
+    
+    except Exception as e:
+        st.error(f"❌ Error connecting to API: {str(e)}")
+        st.info("Make sure the API is running at http://localhost:8000")
+
+# Tab 5: Activity Logs
+with tab5:
     st.subheader("📝 Activity Logs")
     st.caption("View recent activity (requires log file)")
     
@@ -537,7 +660,7 @@ with col1:
     st.caption(f"🕐 Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 with col2:
-    if st.button("🔄 Refresh", use_container_width=True):
+    if st.button("🔄 Refresh", width='stretch'):
         st.rerun()
 
 with col3:

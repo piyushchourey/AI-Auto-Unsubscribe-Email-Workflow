@@ -2,7 +2,7 @@
 
 Automated unsubscribe processing system with LLM-based intent detection, built with FastAPI, LangChain, and Brevo integration.
 
-**Made with ❤️ by [Piyush Chourey](https://github.com/piyushchourey11)**
+**Made with ❤️ by [Piyush Chourey](https://github.com/piyushchourey)**
 
 ---
 

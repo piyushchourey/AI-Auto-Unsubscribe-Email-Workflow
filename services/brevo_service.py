@@ -35,7 +35,10 @@ class BrevoService:
             
             # Update contact to blacklist them
             update_contact = sib_api_v3_sdk.UpdateContact(
-                email_blacklisted=True
+                email_blacklisted=True,
+                attributes={
+                    "EMAIL_MARKETING": "Unsubscribe"
+                }
             )
             
             if contact_exists:
@@ -51,7 +54,10 @@ class BrevoService:
                 create_contact = sib_api_v3_sdk.CreateContact(
                     email=email,
                     email_blacklisted=True,
-                    update_enabled=True
+                    update_enabled=True,
+                    attributes={
+                        "EMAIL_MARKETING": "Unsubscribe"
+                    }
                 )
                 self.api_instance.create_contact(create_contact)
                 return {

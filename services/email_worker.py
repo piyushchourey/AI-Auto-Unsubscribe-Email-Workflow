@@ -11,17 +11,19 @@ from services.brevo_service import BrevoService
 class EmailWorker:
     """Background worker that processes emails from IMAP mailbox every hour"""
     
-    def __init__(self, intent_detector: IntentDetector, brevo_service: BrevoService):
+    def __init__(self, intent_detector: IntentDetector, brevo_service: BrevoService, db_service=None):
         """
         Initialize the email worker
         
         Args:
             intent_detector: Intent detection service
             brevo_service: Brevo API service
+            db_service: Database service for logging (optional)
         """
         self.email_fetcher = EmailFetcher()
         self.intent_detector = intent_detector
         self.brevo_service = brevo_service
+        self.db_service = db_service
         self.scheduler = AsyncIOScheduler()
         self.is_running = False
         
@@ -78,6 +80,24 @@ class EmailWorker:
                     print(f"⚠️ Failed to unsubscribe from Brevo: {brevo_result['message']}")
             else:
                 print(f"ℹ️ No unsubscribe intent detected - no action taken")
+            
+            # Step 3: Log to database
+            if self.db_service:
+                try:
+                    self.db_service.log_unsubscribe_action(
+                        email=sender_email,
+                        intent_detected=intent_result.has_unsubscribe_intent,
+                        brevo_success=result.get('unsubscribed_from_brevo', False),
+                        intent_confidence=intent_result.confidence,
+                        intent_reasoning=intent_result.reasoning,
+                        brevo_action=result.get('brevo_details', {}).get('action') if result.get('brevo_details') else None,
+                        brevo_message=result.get('brevo_details', {}).get('message') if result.get('brevo_details') else None,
+                        email_subject=subject,
+                        message_text=message_text,
+                        source="worker"
+                    )
+                except Exception as db_error:
+                    print(f"⚠️ Database logging failed: {str(db_error)}")
         
         except Exception as e:
             error_msg = f"Error processing email: {str(e)}"

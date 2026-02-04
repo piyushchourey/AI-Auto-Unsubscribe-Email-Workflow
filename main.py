@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import uvicorn
 
@@ -8,31 +9,39 @@ from models import InboundEmailRequest, UnsubscribeResponse, TestBrevoRequest
 from services.intent_detector import IntentDetector
 from services.brevo_service import BrevoService
 from services.email_worker import EmailWorker
+from services.database_service import DatabaseService
+from database import init_db
 
 
 # Initialize services
 intent_detector = None
 brevo_service = None
 email_worker = None
+db_service = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup"""
-    global intent_detector, brevo_service, email_worker
+    global intent_detector, brevo_service, email_worker, db_service
     
     print("🚀 Starting Unsubscribe Email Workflow API...")
     print(f"📡 LLM Provider: {settings.llm_provider}")
     
+    # Initialize database
+    print("🗄️ Initializing database...")
+    init_db()
+    
     # Initialize services
     intent_detector = IntentDetector()
     brevo_service = BrevoService()
+    db_service = DatabaseService()
     
     print("✅ Services initialized successfully")
     
     # Initialize and start email worker
     if settings.imap_enabled:
-        email_worker = EmailWorker(intent_detector, brevo_service)
+        email_worker = EmailWorker(intent_detector, brevo_service, db_service)
         await email_worker.start()
     else:
         print("⏭️ IMAP worker disabled in configuration")
@@ -138,6 +147,23 @@ async def process_inbound_email(request: InboundEmailRequest):
                 print(f"⚠️ Failed to unsubscribe from Brevo: {brevo_result['message']}")
         else:
             print(f"ℹ️ No unsubscribe intent detected - no action taken")
+        
+        # Step 3: Log to database
+        try:
+            db_service.log_unsubscribe_action(
+                email=request.sender_email,
+                intent_detected=intent_result.has_unsubscribe_intent,
+                brevo_success=unsubscribed_from_brevo,
+                intent_confidence=intent_result.confidence,
+                intent_reasoning=intent_result.reasoning,
+                brevo_action=brevo_details.get("action") if brevo_details else None,
+                brevo_message=brevo_details.get("message") if brevo_details else None,
+                email_subject=request.subject,
+                message_text=request.message_text,
+                source="webhook"
+            )
+        except Exception as db_error:
+            print(f"⚠️ Database logging failed: {str(db_error)}")
         
         # Build response
         return UnsubscribeResponse(
@@ -271,6 +297,116 @@ async def trigger_email_check():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error checking emails: {str(e)}"
+        )
+
+
+# ========================================
+# Database / Blocklist Endpoints
+# ========================================
+
+@app.get("/blocklist/stats")
+async def get_blocklist_stats():
+    """
+    Get statistics about blocklisted emails
+    """
+    try:
+        stats = db_service.get_blocklist_stats()
+        return {
+            "success": True,
+            "stats": stats
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting stats: {str(e)}"
+        )
+
+
+@app.get("/blocklist/all")
+async def get_all_blocklisted(successful_only: bool = True):
+    """
+    Get all blocklisted emails
+    
+    Query params:
+        successful_only: If true, only return successfully blocklisted emails (default: true)
+    """
+    try:
+        emails = db_service.get_all_blocklisted_emails(successful_only=successful_only)
+        return {
+            "success": True,
+            "count": len(emails),
+            "emails": emails
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving blocklist: {str(e)}"
+        )
+
+
+@app.get("/blocklist/search/{email}")
+async def search_blocklist(email: str):
+    """
+    Search for a specific email in the blocklist
+    """
+    try:
+        results = db_service.search_by_email(email)
+        return {
+            "success": True,
+            "count": len(results),
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error searching: {str(e)}"
+        )
+
+
+@app.get("/blocklist/recent")
+async def get_recent_logs(limit: int = 50):
+    """
+    Get recent unsubscribe logs
+    
+    Query params:
+        limit: Maximum number of logs to return (default: 50, max: 500)
+    """
+    try:
+        if limit > 500:
+            limit = 500
+        
+        logs = db_service.get_recent_logs(limit=limit)
+        return {
+            "success": True,
+            "count": len(logs),
+            "logs": logs
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving logs: {str(e)}"
+        )
+
+
+@app.get("/blocklist/export")
+async def export_blocklist(successful_only: bool = True):
+    """
+    Export blocklisted emails to CSV file
+    
+    Query params:
+        successful_only: If true, only export successfully blocklisted emails (default: true)
+    """
+    try:
+        filepath = db_service.export_to_csv(successful_only=successful_only)
+        return FileResponse(
+            path=filepath,
+            media_type='text/csv',
+            filename=f"blocklisted_emails.csv"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error exporting: {str(e)}"
         )
 
 

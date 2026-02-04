@@ -16,5 +16,8 @@ numpy>=2.0.0
 imapclient>=3.0.0
 apscheduler>=3.10.0
 
+# Database
+sqlalchemy>=2.0.0
+
 # UI
 streamlit>=1.30.0
