@@ -123,12 +123,23 @@ class EmailFetcher:
                         # Extract body
                         body = self._extract_email_body(msg)
                         
+                        # Extract message headers
+                        headers = {
+                            'Message-ID': msg.get('Message-ID', ''),
+                            'In-Reply-To': msg.get('In-Reply-To', ''),
+                            'References': msg.get('References', ''),
+                            'Received': msg.get('Received', ''),
+                        }
+                        
                         if sender_email and body:
                             emails.append({
                                 'sender_email': sender_email,
                                 'message_text': body,
                                 'subject': subject,
-                                'msg_id': msg_id
+                                'message_id': headers['Message-ID'],
+                                'in_reply_to': headers['In-Reply-To'],
+                                'references': headers['References'],
+                                'received_time': headers['Received']
                             })
                             print(f"  📩 From: {sender_email}")
                             print(f"  📄 Subject: {subject[:50]}...")

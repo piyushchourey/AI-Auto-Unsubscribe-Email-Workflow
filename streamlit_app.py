@@ -89,6 +89,13 @@ def save_env_file(env_vars):
         f.write(f"GEMINI_API_KEY={env_vars.get('GEMINI_API_KEY', '')}\n")
         f.write(f"GEMINI_MODEL={env_vars.get('GEMINI_MODEL', 'gemini-2.0-flash-exp')}\n\n")
         
+        f.write("# Microsoft Graph API Configuration\n")
+        f.write(f"USE_GRAPH_API={env_vars.get('USE_GRAPH_API', 'false')}\n")
+        f.write(f"GRAPH_TENANT_ID={env_vars.get('GRAPH_TENANT_ID', '')}\n")
+        f.write(f"GRAPH_CLIENT_ID={env_vars.get('GRAPH_CLIENT_ID', '')}\n")
+        f.write(f"GRAPH_CLIENT_SECRET={env_vars.get('GRAPH_CLIENT_SECRET', '')}\n")
+        f.write(f"GRAPH_USER_EMAIL={env_vars.get('GRAPH_USER_EMAIL', '')}\n\n")
+        
         f.write("# IMAP Configuration\n")
         f.write(f"IMAP_ENABLED={env_vars.get('IMAP_ENABLED', 'false')}\n")
         f.write(f"IMAP_PROVIDER={env_vars.get('IMAP_PROVIDER', 'outlook')}\n")
@@ -228,12 +235,23 @@ with st.sidebar:
             placeholder=account_config['email_placeholder']
         )
         
-        imap_password = st.text_input(
-            "Password / App Password",
-            value=current_env.get('IMAP_PASSWORD', ''),
-            type="password",
-            help="Use App Password for Gmail/Outlook"
-        )
+        # Password field - only show for non-Graph API accounts
+        if selected_account == "Lending Logic (Microsoft 365)":
+            # Microsoft Graph API uses OAuth - no password needed
+            st.info("🔐 **Microsoft Graph API Authentication**\n\n"
+                   "This account uses OAuth 2.0 authentication via Azure AD. "
+                   "No password is required!\n\n"
+                   "✅ Configured via Azure Portal\n"
+                   "✅ Client ID, Secret & Tenant ID in .env file")
+            imap_password = ""  # No password needed
+        else:
+            # Other providers need password
+            imap_password = st.text_input(
+                "Password / App Password",
+                value=current_env.get('IMAP_PASSWORD', ''),
+                type="password",
+                help="Use App Password for Gmail. Regular password for Rediff."
+            )
         
         check_interval = st.number_input(
             "Check Interval (seconds)",
@@ -291,6 +309,9 @@ with st.sidebar:
     
     # Save configuration
     if st.button("💾 Save Configuration", type="primary", width='stretch'):
+        # Determine if we should use Graph API
+        use_graph_api = selected_account == "Lending Logic (Microsoft 365)"
+        
         new_env = {
             'BREVO_API_KEY': brevo_api_key,
             'LLM_PROVIDER': llm_config['provider'],
@@ -298,6 +319,11 @@ with st.sidebar:
             'OLLAMA_BASE_URL': current_env.get('OLLAMA_BASE_URL', 'http://localhost:11434'),
             'GEMINI_API_KEY': current_env.get('GEMINI_API_KEY', ''),
             'GEMINI_MODEL': current_env.get('GEMINI_MODEL', 'gemini-2.0-flash-exp'),
+            'USE_GRAPH_API': 'true' if use_graph_api else 'false',
+            'GRAPH_TENANT_ID': current_env.get('GRAPH_TENANT_ID', ''),
+            'GRAPH_CLIENT_ID': current_env.get('GRAPH_CLIENT_ID', ''),
+            'GRAPH_CLIENT_SECRET': current_env.get('GRAPH_CLIENT_SECRET', ''),
+            'GRAPH_USER_EMAIL': imap_email if use_graph_api else current_env.get('GRAPH_USER_EMAIL', ''),
             'IMAP_ENABLED': 'true' if imap_enabled else 'false',
             'IMAP_PROVIDER': account_config['provider'],
             'IMAP_HOST': account_config['host'],
