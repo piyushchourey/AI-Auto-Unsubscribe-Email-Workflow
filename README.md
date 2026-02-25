@@ -177,6 +177,11 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 The API will be available at `http://localhost:8000`
 
+
+Run the Streamlit Frontend - (After ng confing changes)
+
+streamlit run streamlit_app.py --server.address 0.0.0.0 \ --server.port 8501 --server.headless true --server.enableCORS false --server.baseUrlPath /unsubscribe-ui
+
 **What happens on startup:**
 - ✅ Services initialize (Intent Detector + Brevo API)
 - ✅ If `IMAP_ENABLED=true`, the background worker starts
