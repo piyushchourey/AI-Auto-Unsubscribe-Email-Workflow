@@ -94,30 +94,42 @@ class EmailWorker:
                     print(f"✅ Successfully unsubscribed {sender_email} from Brevo")
                     
                     # Step 3: Send confirmation email
-                    print(f"📧 Sending confirmation email to {sender_email}...")
-                    
-                    if self.use_graph_api and message_id:
-                        # Use Graph API for Microsoft 365
-                        reply_sent = await self.email_fetcher.send_reply_email(
-                            message_id=message_id,
-                            recipient_email=sender_email,
-                            subject=subject
-                        )
+                    # Send confirmation email only if enabled in configuration
+                    if settings.send_confirmation_email:
+                        print(f"📧 Sending confirmation email to {sender_email}...")
+
+                        if self.use_graph_api and message_id:
+                            # Use Graph API for Microsoft 365
+                            try:
+                                reply_sent = await self.email_fetcher.send_reply_email(
+                                    message_id=message_id,
+                                    recipient_email=sender_email,
+                                    subject=subject
+                                )
+                            except Exception as e:
+                                print(f"❌ Failed to send Graph reply: {e}")
+                                reply_sent = False
+                        else:
+                            # Use SMTP for IMAP providers (Rediff, Gmail) or fallback
+                            try:
+                                reply_sent = await self.email_sender.send_unsubscribe_confirmation(
+                                    to_email=sender_email,
+                                    original_subject=subject,
+                                    in_reply_to=email_data.get('in_reply_to'),
+                                    references=email_data.get('references')
+                                )
+                            except Exception as e:
+                                print(f"❌ Failed to send SMTP confirmation: {e}")
+                                reply_sent = False
+
+                        result['reply_sent'] = reply_sent
+
+                        if reply_sent:
+                            print(f"✅ Confirmation email sent successfully")
+                        else:
+                            print(f"⚠️ Failed to send confirmation email")
                     else:
-                        # Use SMTP for IMAP providers (Rediff, Gmail)
-                        reply_sent = await self.email_sender.send_unsubscribe_confirmation(
-                            to_email=sender_email,
-                            original_subject=subject,
-                            in_reply_to=email_data.get('in_reply_to'),
-                            references=email_data.get('references')
-                        )
-                    
-                    result['reply_sent'] = reply_sent
-                    
-                    if reply_sent:
-                        print(f"✅ Confirmation email sent successfully")
-                    else:
-                        print(f"⚠️ Failed to send confirmation email")
+                        print("ℹ️ Confirmation email disabled by configuration")
                 else:
                     print(f"⚠️ Failed to unsubscribe from Brevo: {brevo_result['message']}")
             else:

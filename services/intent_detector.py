@@ -21,7 +21,9 @@ class IntentDetector:
             print(f"Using Ollama with model: {settings.ollama_model}")
             return OllamaLLM(
                 model=settings.ollama_model,
-                temperature=0.1,  # Low temperature for more consistent results
+                temperature=0,
+                top_p=1,
+                repeat_penalty=1.05
             )
         elif settings.llm_provider == "gemini":
             print(f"Using Gemini with model: {settings.gemini_model}")
@@ -36,34 +38,45 @@ class IntentDetector:
     
     def _create_prompt_template(self) -> PromptTemplate:
         """Create the prompt template for intent detection"""
-        template = """You are an email intent classifier. Analyze the following email message and determine if it contains an unsubscribe request.
+        template = """
+You are a highly accurate email intent classification system.
 
-Common unsubscribe phrases include:
-- "unsubscribe"
-- "remove me"
-- "stop emails"
-- "stop sending"
-- "take me off"
-- "opt out"
-- "cancel subscription"
-- "no longer interested"
-- "don't want to receive"
+Your task is to determine whether the sender is requesting to unsubscribe 
+or expressing that they do not want to receive marketing emails anymore.
+
+IMPORTANT:
+- Focus on the sender's intent, not just keywords.
+- The request may be direct or indirect.
+- The sender may be polite, angry, sarcastic, or subtle.
+- Questions about how to unsubscribe DO count as unsubscribe intent.
+- Complaints alone DO NOT count unless they clearly imply stopping emails.
+- Ignore signatures, disclaimers, and quoted previous emails.
+- Be conservative in your decision.
+
+CRITICAL RULE:
+If you are not confident that the sender clearly wants to unsubscribe,
+you MUST classify it as FALSE.
+
+Classify as TRUE only if the unsubscribe intent is clear and explicit.
 
 Email Message:
+----------------
 {message_text}
+----------------
 
-Analyze the message carefully and respond ONLY with a valid JSON object in this exact format:
-{{
+Respond ONLY with valid JSON in this exact format:
+{
     "has_unsubscribe_intent": true or false,
     "confidence": "high" or "medium" or "low",
-    "reasoning": "brief explanation"
-}}
+    "reasoning": "Clear and concise explanation of why the intent was classified this way."
+}
 
-Your response must be valid JSON only, with no additional text before or after."""
+Do not include any additional text outside the JSON.
+"""
         
         return PromptTemplate(
             input_variables=["message_text"],
-            template=template
+            template=template.strip()
         )
     
     async def detect_intent(self, message_text: str) -> UnsubscribeIntentResponse:

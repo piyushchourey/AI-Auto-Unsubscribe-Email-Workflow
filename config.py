@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     imap_password: str = Field(default="", validation_alias="IMAP_PASSWORD")
     imap_folder: str = Field(default="INBOX", validation_alias="IMAP_FOLDER")
     imap_check_interval: int = Field(default=3600, validation_alias="IMAP_CHECK_INTERVAL")
+
+    # Confirmation email behavior
+    # If true, send a confirmation email to the sender after a successful Brevo unsubscribe
+    send_confirmation_email: bool = Field(default=False, validation_alias="SEND_CONFIRMATION_EMAIL")
     
     # Database
     database_url: str = Field(default="sqlite:///./unsubscribe_logs.db", validation_alias="DATABASE_URL")

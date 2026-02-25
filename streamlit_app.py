@@ -105,6 +105,7 @@ def save_env_file(env_vars):
         f.write(f"IMAP_PASSWORD={env_vars.get('IMAP_PASSWORD', '')}\n")
         f.write(f"IMAP_FOLDER={env_vars.get('IMAP_FOLDER', 'INBOX')}\n")
         f.write(f"IMAP_CHECK_INTERVAL={env_vars.get('IMAP_CHECK_INTERVAL', '3600')}\n")
+        f.write(f"SEND_CONFIRMATION_EMAIL={env_vars.get('SEND_CONFIRMATION_EMAIL', 'false')}\n")
 
 
 def check_api_health():
@@ -214,9 +215,20 @@ with st.sidebar:
     
     st.subheader("📧 Email Account")
     
+    # Determine default account based on current env provider
+    default_account_index = 0
+    current_provider = current_env.get('IMAP_PROVIDER', 'outlook')
+    if current_provider == 'rediff':
+        default_account_index = 0  # Cloudchillies (Rediff)
+    elif current_provider == 'outlook':
+        default_account_index = 1  # Lending Logic (Microsoft 365)
+    elif current_provider == 'gmail':
+        default_account_index = 2  # Gmail
+    
     selected_account = st.selectbox(
         "Select Account",
         options=list(EMAIL_ACCOUNTS.keys()),
+        index=default_account_index,
         help="Choose which email account to monitor"
     )
     
@@ -261,15 +273,25 @@ with st.sidebar:
             step=300,
             help="How often to check for new emails"
         )
+
+        send_confirmation = st.toggle(
+            "Send Confirmation Email",
+            value=current_env.get('SEND_CONFIRMATION_EMAIL', 'false').lower() == 'true',
+            help="Send a confirmation email to the sender after successful unsubscribe"
+        )
     
     st.divider()
     
     st.subheader("🤖 LLM Provider")
     
+    # Determine default LLM based on current env
+    current_llm_provider = current_env.get('LLM_PROVIDER', 'gemini')
+    default_llm_index = 0 if current_llm_provider == 'ollama' else 1
+    
     selected_llm = st.selectbox(
         "Select LLM",
         options=list(LLM_PROVIDERS.keys()),
-        index=0 if current_env.get('LLM_PROVIDER', 'gemini') == 'ollama' else 1
+        index=default_llm_index
     )
     
     llm_config = LLM_PROVIDERS[selected_llm]
@@ -333,6 +355,8 @@ with st.sidebar:
             'IMAP_FOLDER': 'INBOX',
             'IMAP_CHECK_INTERVAL': str(check_interval)
         }
+        # Confirmation flag
+        new_env['SEND_CONFIRMATION_EMAIL'] = 'true' if send_confirmation else 'false'
         
         if llm_config['provider'] == 'ollama':
             new_env['OLLAMA_BASE_URL'] = ollama_url
@@ -353,27 +377,33 @@ with st.sidebar:
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("🔄 Auto Restart API", width='stretch'):
-                with st.spinner("Restarting API server..."):
-                    success, message = restart_api()
-                    
-                    if success:
-                        st.success(f"✅ {message}")
-                        st.info("⏳ Waiting for API to start...")
-                        
-                        # Wait for API to be ready
-                        for i in range(10):
-                            time.sleep(2)
-                            healthy, _ = check_api_health()
-                            if healthy:
-                                st.success("✅ API is running!")
-                                st.session_state['config_saved'] = False
-                                st.rerun()
-                                break
+            if st.button("🚀 Start Worker", width='stretch'):
+                with st.spinner("Starting worker..."):
+                    try:
+                        resp = requests.post(f"{API_BASE_URL}/worker/start", timeout=60)
+                        if resp.status_code == 200:
+                            st.success("✅ Worker start initiated")
+                            st.info("⏳ Waiting for worker to start...")
+
+                            # Wait for worker to report running
+                            for i in range(10):
+                                time.sleep(2)
+                                worker_status = get_worker_status()
+                                if worker_status and worker_status.get('running'):
+                                    st.success("✅ Worker is running!")
+                                    st.session_state['config_saved'] = False
+                                    st.rerun()
+                                    break
+                            else:
+                                st.warning("⏳ Worker starting (may take a moment)")
                         else:
-                            st.warning("⏳ API starting (may take a moment)")
-                    else:
-                        st.error(f"❌ {message}")
+                            try:
+                                error_text = resp.json()
+                            except Exception:
+                                error_text = resp.text
+                            st.error(f"❌ Error starting worker: {error_text}")
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
         
         with col2:
             if st.button("📝 Manual Restart", width='stretch'):

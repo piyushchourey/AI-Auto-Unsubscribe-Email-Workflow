@@ -9,6 +9,8 @@ from models import InboundEmailRequest, UnsubscribeResponse, TestBrevoRequest
 from services.intent_detector import IntentDetector
 from services.brevo_service import BrevoService
 from services.email_worker import EmailWorker
+from services.email_sender import EmailSender
+from services.graph_email_fetcher import GraphEmailFetcher
 from services.database_service import DatabaseService
 from database import init_db
 
@@ -41,8 +43,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize and start email worker
     if settings.imap_enabled:
+        # Initialize the worker but do NOT start it automatically.
+        # The Streamlit UI will call the /worker/start endpoint to start the worker on demand.
         email_worker = EmailWorker(intent_detector, brevo_service, db_service)
-        await email_worker.start()
+        print("⏸️ IMAP worker initialized but not started. Start via /worker/start endpoint")
     else:
         print("⏭️ IMAP worker disabled in configuration")
     
@@ -143,6 +147,37 @@ async def process_inbound_email(request: InboundEmailRequest):
             
             if brevo_result["success"]:
                 print(f"✅ Successfully unsubscribed {request.sender_email} from Brevo")
+                # Optionally send confirmation email if configured
+                reply_sent = False
+                if settings.send_confirmation_email:
+                    try:
+                        # Prefer Graph API reply if configured and available; fallback to SMTP
+                        if settings.use_graph_api:
+                            # The webhook may not include a message_id, so fallback if missing
+                            message_id = getattr(request, 'message_id', None)
+                            if message_id:
+                                fetcher = GraphEmailFetcher()
+                                reply_sent = await fetcher.send_reply_email(
+                                    message_id=message_id,
+                                    recipient_email=request.sender_email,
+                                    subject=request.subject or ''
+                                )
+                            else:
+                                sender = EmailSender()
+                                reply_sent = await sender.send_unsubscribe_confirmation(
+                                    to_email=request.sender_email,
+                                    original_subject=request.subject or ''
+                                )
+                        else:
+                            sender = EmailSender()
+                            reply_sent = await sender.send_unsubscribe_confirmation(
+                                to_email=request.sender_email,
+                                original_subject=request.subject or ''
+                            )
+                    except Exception as e:
+                        print(f"❌ Failed to send confirmation email: {e}")
+                else:
+                    reply_sent = False
             else:
                 print(f"⚠️ Failed to unsubscribe from Brevo: {brevo_result['message']}")
         else:
@@ -175,7 +210,8 @@ async def process_inbound_email(request: InboundEmailRequest):
             details={
                 "intent_confidence": intent_result.confidence,
                 "intent_reasoning": intent_result.reasoning,
-                "brevo_result": brevo_details
+                "brevo_result": brevo_details,
+                "reply_sent": reply_sent
             }
         )
         
@@ -297,6 +333,50 @@ async def trigger_email_check():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error checking emails: {str(e)}"
+        )
+
+
+@app.post("/worker/start")
+async def start_worker():
+    """
+    Start the email worker on demand. This does not restart the API server.
+    """
+    global email_worker
+
+    if not settings.imap_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="IMAP worker is disabled in configuration"
+        )
+
+    if not email_worker:
+        email_worker = EmailWorker(intent_detector, brevo_service, db_service)
+
+    try:
+        await email_worker.start()
+        return {"success": True, "message": "Email worker started"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error starting worker: {str(e)}"
+        )
+
+
+@app.post("/worker/stop")
+async def stop_worker():
+    """
+    Stop the running email worker.
+    """
+    if not email_worker:
+        return {"success": False, "message": "Email worker not initialized"}
+
+    try:
+        await email_worker.stop()
+        return {"success": True, "message": "Email worker stopped"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error stopping worker: {str(e)}"
         )
 
 
