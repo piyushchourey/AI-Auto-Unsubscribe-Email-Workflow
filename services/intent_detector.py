@@ -111,9 +111,12 @@ Do not include any additional text outside the JSON.
                 end_idx = result_cleaned.rfind('}')
                 if start_idx != -1 and end_idx != -1:
                     result_cleaned = result_cleaned[start_idx:end_idx + 1]
-            
+            # attempt to load JSON and validate fields
             parsed_result = json.loads(result_cleaned)
-            
+            # ensure required key exists and is boolean
+            if not isinstance(parsed_result.get("has_unsubscribe_intent"), bool):
+                raise ValueError("missing or invalid has_unsubscribe_intent field")
+
             return UnsubscribeIntentResponse(
                 has_unsubscribe_intent=parsed_result.get("has_unsubscribe_intent", False),
                 confidence=parsed_result.get("confidence", "low"),
@@ -121,12 +124,19 @@ Do not include any additional text outside the JSON.
             )
             
         except json.JSONDecodeError as e:
-            print(f"Failed to parse LLM response as JSON: {result}")
+            # log the raw output for debugging
+            print("Failed to parse LLM response as JSON:")
+            print(result_text)
             print(f"Error: {e}")
             # Fallback: simple keyword matching
             return self._fallback_detection(message_text)
         except Exception as e:
-            print(f"Error during intent detection: {e}")
+            # log the raw output as well
+            print("Error during intent detection:", e)
+            try:
+                print(result_text)
+            except NameError:
+                pass
             return self._fallback_detection(message_text)
     
     def _fallback_detection(self, message_text: str) -> UnsubscribeIntentResponse:

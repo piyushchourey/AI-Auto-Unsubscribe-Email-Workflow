@@ -12,8 +12,9 @@ class EmailFetcher:
     
     def __init__(self):
         """Initialize IMAP connection settings"""
-        self.host = settings.get_imap_host()
-        self.port = settings.get_imap_port()
+        # Use Pydantic settings attributes directly
+        self.host = settings.imap_host
+        self.port = settings.imap_port
         self.email = settings.imap_email
         self.password = settings.imap_password
         self.folder = settings.imap_folder

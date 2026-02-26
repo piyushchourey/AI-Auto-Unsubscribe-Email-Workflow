@@ -16,6 +16,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize session state
+if 'confirm_clear' not in st.session_state:
+    st.session_state['confirm_clear'] = False
+
 # API base URL
 API_BASE_URL = "http://localhost:8000"
 
@@ -692,6 +696,45 @@ with tab4:
                     st.info("📭 No blocklist entries yet")
             else:
                 st.error("❌ Failed to fetch recent logs")
+            
+            # Clear database section
+            st.divider()
+            st.subheader("⚠️ Database Management")
+            
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("🗑️ Clear All Records", width='stretch', help="Delete all blocklist entries from database"):
+                    st.session_state['confirm_clear'] = True
+            
+            # Confirmation dialog
+            if st.session_state.get('confirm_clear', False):
+                st.warning("⚠️ **DANGER ZONE** - This action cannot be undone!")
+                st.write("Click below to confirm clearing **ALL** database records:")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Yes, Clear Everything", type="secondary", width='stretch'):
+                        with st.spinner("Clearing database..."):
+                            try:
+                                clear_response = requests.post(
+                                    f"{API_BASE_URL}/blocklist/clear",
+                                    timeout=30
+                                )
+                                if clear_response.status_code == 200:
+                                    clear_data = clear_response.json()
+                                    st.success(f"✅ {clear_data.get('message')}")
+                                    st.session_state['confirm_clear'] = False
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ Error clearing database: {clear_response.text}")
+                            except Exception as e:
+                                st.error(f"❌ Error: {str(e)}")
+                
+                with col2:
+                    if st.button("❌ Cancel", width='stretch'):
+                        st.session_state['confirm_clear'] = False
+                        st.rerun()
         else:
             st.error("❌ Failed to fetch statistics")
     

@@ -490,6 +490,22 @@ async def export_blocklist(successful_only: bool = True):
         )
 
 
+@app.post("/blocklist/clear")
+async def clear_blocklist():
+    """
+    Clear all blocklist records from the database (destructive operation)
+    WARNING: This will permanently delete all unsubscribe logs!
+    """
+    try:
+        result = db_service.clear_all_logs()
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error clearing database: {str(e)}"
+        )
+
+
 if __name__ == "__main__":
     print(f"""
 ╔═══════════════════════════════════════════════════════════════╗
