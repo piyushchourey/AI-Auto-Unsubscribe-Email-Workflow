@@ -232,3 +232,38 @@ class DatabaseService:
             
         finally:
             db.close()
+    
+    def clear_all_logs(self) -> Dict:
+        """
+        Clear all unsubscribe logs from the database (destructive operation)
+        
+        Returns:
+            Dictionary with count of deleted records and confirmation
+        """
+        db = SessionLocal()
+        try:
+            # Count records before deletion
+            count = db.query(UnsubscribeLog).count()
+            
+            # Delete all records
+            db.query(UnsubscribeLog).delete()
+            db.commit()
+            
+            print(f"🗑️  Cleared {count} log records from database")
+            
+            return {
+                "success": True,
+                "message": f"Successfully cleared {count} log records",
+                "deleted_count": count
+            }
+            
+        except Exception as e:
+            db.rollback()
+            print(f"❌ Error clearing database: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error clearing database: {str(e)}",
+                "deleted_count": 0
+            }
+        finally:
+            db.close()

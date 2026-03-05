@@ -1,5 +1,6 @@
 import json
-from typing import Dict
+import re
+from typing import Dict, Optional
 from langchain_core.prompts import PromptTemplate
 from langchain_ollama import OllamaLLM
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -21,7 +22,9 @@ class IntentDetector:
             print(f"Using Ollama with model: {settings.ollama_model}")
             return OllamaLLM(
                 model=settings.ollama_model,
-                temperature=0.1,  # Low temperature for more consistent results
+                temperature=0,
+                top_p=1,
+                repeat_penalty=1.05
             )
         elif settings.llm_provider == "gemini":
             print(f"Using Gemini with model: {settings.gemini_model}")
@@ -36,36 +39,93 @@ class IntentDetector:
     
     def _create_prompt_template(self) -> PromptTemplate:
         """Create the prompt template for intent detection"""
-        template = """You are an email intent classifier. Analyze the following email message and determine if it contains an unsubscribe request.
+        template = """
+You are a highly accurate email intent classification system.
 
-Common unsubscribe phrases include:
-- "unsubscribe"
-- "remove me"
-- "stop emails"
-- "stop sending"
-- "take me off"
-- "opt out"
-- "cancel subscription"
-- "no longer interested"
-- "don't want to receive"
+Your task is to determine whether the sender is requesting to unsubscribe 
+or expressing that they do not want to receive marketing emails anymore.
+
+IMPORTANT:
+- Focus on the sender's intent, not just keywords.
+- The request may be direct or indirect.
+- The sender may be polite, angry, sarcastic, or subtle.
+- Questions about how to unsubscribe DO count as unsubscribe intent.
+- Complaints alone DO NOT count unless they clearly imply stopping emails.
+- Ignore signatures, disclaimers, and quoted previous emails.
+- Be conservative in your decision.
+
+CRITICAL RULE:
+If you are not confident that the sender clearly wants to unsubscribe,
+you MUST classify it as FALSE.
+
+Classify as TRUE only if the unsubscribe intent is clear and explicit.
 
 Email Message:
+----------------
 {message_text}
+----------------
 
-Analyze the message carefully and respond ONLY with a valid JSON object in this exact format:
+Respond ONLY with valid JSON in this exact format:
 {{
     "has_unsubscribe_intent": true or false,
     "confidence": "high" or "medium" or "low",
-    "reasoning": "brief explanation"
+    "reasoning": "Clear and concise explanation of why the intent was classified this way."
 }}
 
-Your response must be valid JSON only, with no additional text before or after."""
+Do not include any additional text outside the JSON.
+"""
         
         return PromptTemplate(
             input_variables=["message_text"],
-            template=template
+            template=template.strip()
         )
-    
+
+    def _parse_llm_json(self, raw: str) -> Optional[Dict]:
+        """
+        Parse LLM JSON response, trying repair and regex extraction if needed.
+        Returns dict with has_unsubscribe_intent, confidence, reasoning or None.
+        """
+        text = raw.strip()
+        if not text:
+            return None
+
+        # Try direct parse
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Try repairing truncated JSON (missing closing " and/or })
+        for suffix in ('}', '"}', '"}\n}'):
+            try:
+                return json.loads(text + suffix)
+            except json.JSONDecodeError:
+                continue
+
+        # Try extracting fields with regex (handles truncated or malformed JSON)
+        intent_match = re.search(
+            r'"has_unsubscribe_intent"\s*:\s*(true|false)',
+            text,
+            re.IGNORECASE
+        )
+        confidence_match = re.search(
+            r'"confidence"\s*:\s*"(high|medium|low)"',
+            text,
+            re.IGNORECASE
+        )
+        reasoning_match = re.search(
+            r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)',
+            text,
+            re.DOTALL
+        )
+        if intent_match:
+            return {
+                "has_unsubscribe_intent": intent_match.group(1).lower() == "true",
+                "confidence": confidence_match.group(1).lower() if confidence_match else "low",
+                "reasoning": (reasoning_match.group(1).replace("\\\"", '"') if reasoning_match else "") or "",
+            }
+        return None
+
     async def detect_intent(self, message_text: str) -> UnsubscribeIntentResponse:
         """
         Detect if the message contains unsubscribe intent
@@ -76,18 +136,22 @@ Your response must be valid JSON only, with no additional text before or after."
         Returns:
             UnsubscribeIntentResponse with detection results
         """
+        result_text = ""
         try:
             # Format the prompt with the message text
             prompt = self.prompt_template.format(message_text=message_text)
-            
+
             # Invoke the LLM
             result = await self.llm.ainvoke(prompt)
-            
+
             # Handle different return types (string vs AIMessage)
             if hasattr(result, 'content'):
                 result_text = result.content
             else:
                 result_text = str(result)
+
+            if result_text is None:
+                result_text = ""
             
             # Parse the JSON response
             result_cleaned = result_text.strip()
@@ -98,22 +162,53 @@ Your response must be valid JSON only, with no additional text before or after."
                 end_idx = result_cleaned.rfind('}')
                 if start_idx != -1 and end_idx != -1:
                     result_cleaned = result_cleaned[start_idx:end_idx + 1]
-            
-            parsed_result = json.loads(result_cleaned)
-            
+
+            parsed_result = self._parse_llm_json(result_cleaned)
+            if parsed_result is None:
+                raise ValueError("Could not parse LLM response as JSON")
+            if not isinstance(parsed_result.get("has_unsubscribe_intent"), bool):
+                raise ValueError("missing or invalid has_unsubscribe_intent field")
+
+            confidence_raw = parsed_result.get("confidence", "low")
+            confidence = (
+                confidence_raw
+                if isinstance(confidence_raw, str) and confidence_raw in ("high", "medium", "low")
+                else "low"
+            )
+            reasoning_raw = parsed_result.get("reasoning", "")
+            reasoning = str(reasoning_raw) if reasoning_raw is not None else ""
+
             return UnsubscribeIntentResponse(
                 has_unsubscribe_intent=parsed_result.get("has_unsubscribe_intent", False),
-                confidence=parsed_result.get("confidence", "low"),
-                reasoning=parsed_result.get("reasoning", "")
+                confidence=confidence,
+                reasoning=reasoning
             )
-            
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse LLM response as JSON: {result}")
-            print(f"Error: {e}")
-            # Fallback: simple keyword matching
-            return self._fallback_detection(message_text)
+
         except Exception as e:
-            print(f"Error during intent detection: {e}")
+            # Try repair/regex parse in case of truncated or malformed JSON
+            result_cleaned = (result_text or "").strip()
+            if not result_cleaned.startswith("{"):
+                start_idx = result_cleaned.find("{")
+                end_idx = result_cleaned.rfind("}")
+                if start_idx != -1 and end_idx != -1:
+                    result_cleaned = result_cleaned[start_idx : end_idx + 1]
+            parsed_result = self._parse_llm_json(result_cleaned) if result_cleaned else None
+            if parsed_result and isinstance(parsed_result.get("has_unsubscribe_intent"), bool):
+                confidence_raw = parsed_result.get("confidence", "low")
+                confidence = (
+                    confidence_raw
+                    if isinstance(confidence_raw, str) and confidence_raw in ("high", "medium", "low")
+                    else "low"
+                )
+                reasoning_raw = parsed_result.get("reasoning", "")
+                reasoning = str(reasoning_raw) if reasoning_raw is not None else ""
+                return UnsubscribeIntentResponse(
+                    has_unsubscribe_intent=parsed_result.get("has_unsubscribe_intent", False),
+                    confidence=confidence,
+                    reasoning=reasoning or "Parsed from malformed JSON",
+                )
+            print("Error during intent detection:", e)
+            print(result_text or "(response not available)")
             return self._fallback_detection(message_text)
     
     def _fallback_detection(self, message_text: str) -> UnsubscribeIntentResponse:

@@ -4,8 +4,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime
 from config import settings
 from services.email_fetcher import EmailFetcher
+from services.graph_email_fetcher import GraphEmailFetcher
 from services.intent_detector import IntentDetector
 from services.brevo_service import BrevoService
+from services.email_sender import EmailSender
 
 
 class EmailWorker:
@@ -20,12 +22,24 @@ class EmailWorker:
             brevo_service: Brevo API service
             db_service: Database service for logging (optional)
         """
-        self.email_fetcher = EmailFetcher()
+        # Initialize appropriate email fetcher based on configuration
+        if settings.imap_provider == "outlook" and settings.use_graph_api:
+            print("📊 Using Microsoft Graph API for Outlook")
+            self.email_fetcher = GraphEmailFetcher()
+            self.use_graph_api = True
+        else:
+            print("📧 Using IMAP for email fetching")
+            self.email_fetcher = EmailFetcher()
+            self.use_graph_api = False
+            
         self.intent_detector = intent_detector
         self.brevo_service = brevo_service
         self.db_service = db_service
         self.scheduler = AsyncIOScheduler()
         self.is_running = False
+        
+        # Initialize email sender for IMAP providers
+        self.email_sender = EmailSender() if not self.use_graph_api else None
         
     async def process_email(self, email_data: dict) -> dict:
         """
@@ -40,6 +54,7 @@ class EmailWorker:
         sender_email = email_data['sender_email']
         message_text = email_data['message_text']
         subject = email_data.get('subject', '')
+        message_id = email_data.get('message_id', '')
         
         print(f"\n📧 Processing email from: {sender_email}")
         print(f"📄 Subject: {subject}")
@@ -50,6 +65,7 @@ class EmailWorker:
             'subject': subject,
             'unsubscribe_intent_detected': False,
             'unsubscribed_from_brevo': False,
+            'reply_sent': False,
             'error': None
         }
         
@@ -76,6 +92,44 @@ class EmailWorker:
                 
                 if brevo_result['success']:
                     print(f"✅ Successfully unsubscribed {sender_email} from Brevo")
+                    
+                    # Step 3: Send confirmation email
+                    # Send confirmation email only if enabled in configuration
+                    if settings.send_confirmation_email:
+                        print(f"📧 Sending confirmation email to {sender_email}...")
+
+                        if self.use_graph_api and message_id:
+                            # Use Graph API for Microsoft 365
+                            try:
+                                reply_sent = await self.email_fetcher.send_reply_email(
+                                    message_id=message_id,
+                                    recipient_email=sender_email,
+                                    subject=subject
+                                )
+                            except Exception as e:
+                                print(f"❌ Failed to send Graph reply: {e}")
+                                reply_sent = False
+                        else:
+                            # Use SMTP for IMAP providers (Rediff, Gmail) or fallback
+                            try:
+                                reply_sent = await self.email_sender.send_unsubscribe_confirmation(
+                                    to_email=sender_email,
+                                    original_subject=subject,
+                                    in_reply_to=email_data.get('in_reply_to'),
+                                    references=email_data.get('references')
+                                )
+                            except Exception as e:
+                                print(f"❌ Failed to send SMTP confirmation: {e}")
+                                reply_sent = False
+
+                        result['reply_sent'] = reply_sent
+
+                        if reply_sent:
+                            print(f"✅ Confirmation email sent successfully")
+                        else:
+                            print(f"⚠️ Failed to send confirmation email")
+                    else:
+                        print("ℹ️ Confirmation email disabled by configuration")
                 else:
                     print(f"⚠️ Failed to unsubscribe from Brevo: {brevo_result['message']}")
             else:

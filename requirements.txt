@@ -16,6 +16,9 @@ numpy>=2.0.0
 imapclient>=3.0.0
 apscheduler>=3.10.0
 
+# Microsoft Graph API
+msal>=1.24.0
+
 # Database
 sqlalchemy>=2.0.0
 

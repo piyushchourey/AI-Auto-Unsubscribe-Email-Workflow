@@ -25,8 +25,8 @@ def test_connection_detailed():
     # Display configuration
     print("\n📋 Configuration:")
     print(f"  Provider: {settings.imap_provider.upper()}")
-    print(f"  Host: {settings.get_imap_host()}")
-    print(f"  Port: {settings.get_imap_port()}")
+    print(f"  Host: {settings.imap_host}")
+    print(f"  Port: {settings.imap_port}")
     print(f"  Email: {settings.imap_email}")
     print(f"  Password: {'*' * len(settings.imap_password) if settings.imap_password else '(NOT SET)'}")
     print(f"  Folder: {settings.imap_folder}")
@@ -38,8 +38,8 @@ def test_connection_detailed():
     # Test 1: Check if host is reachable
     print("\n🔍 Test 1: Checking server reachability...")
     
-    imap_host = settings.get_imap_host()
-    imap_port = settings.get_imap_port()
+    imap_host = settings.imap_host
+    imap_port = settings.imap_port
     
     if not imap_host:
         print(f"  ❌ No IMAP host configured for provider: {settings.imap_provider}")
