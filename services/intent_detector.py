@@ -19,8 +19,9 @@ class IntentDetector:
     def _initialize_llm(self):
         """Initialize the appropriate LLM provider"""
         if settings.llm_provider == "ollama":
-            print(f"Using Ollama with model: {settings.ollama_model}")
+            print(f"Using Ollama with model: {settings.ollama_model} and base url: {settings.ollama_base_url}")
             return OllamaLLM(
+                base_url=settings.ollama_base_url,
                 model=settings.ollama_model,
                 temperature=0,
                 top_p=1,

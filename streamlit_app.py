@@ -8,20 +8,80 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Page configuration
+# Initialize session state (before any other st. calls that affect layout)
+if 'confirm_clear' not in st.session_state:
+    st.session_state['confirm_clear'] = False
+if 'access_token' not in st.session_state:
+    st.session_state['access_token'] = None
+if 'user_email' not in st.session_state:
+    st.session_state['user_email'] = None
+if 'user_role' not in st.session_state:
+    st.session_state['user_role'] = None
+
+# Page configuration: hide sidebar on login page, show after login
 st.set_page_config(
     page_title="Unsubscribe Email Workflow",
     page_icon="📧",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed" if not st.session_state.get("access_token") else "expanded",
+)
+st.markdown(
+    f'''
+        <style>
+            .sidebar .sidebar-content {{
+                width: 400px;
+            }}
+        </style>
+    ''',
+    unsafe_allow_html=True
 )
 
-# Initialize session state
-if 'confirm_clear' not in st.session_state:
-    st.session_state['confirm_clear'] = False
 
 # API base URL
 API_BASE_URL = "http://localhost:8000"
+
+
+def get_auth_headers():
+    """Return Authorization header if user is logged in."""
+    token = st.session_state.get('access_token')
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
+def login_api(email: str, password: str):
+    """Call login endpoint. Returns (success: bool, data: dict or error message)."""
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/auth/login",
+            json={"email": email.strip().lower(), "password": password},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return True, data
+        try:
+            err = response.json()
+            return False, err.get("detail", response.text)
+        except Exception:
+            return False, response.text or "Login failed"
+    except Exception as e:
+        return False, str(e)
+
+
+def logout():
+    """Clear auth session state."""
+    st.session_state['access_token'] = None
+    st.session_state['user_email'] = None
+    st.session_state['user_role'] = None
+
+
+def handle_401(response):
+    """If response is 401, clear session and return True (caller should rerun)."""
+    if response.status_code == 401:
+        logout()
+        return True
+    return False
 
 # Email account configurations
 EMAIL_ACCOUNTS = {
@@ -88,8 +148,8 @@ def save_env_file(env_vars):
         
         f.write("# LLM Configuration\n")
         f.write(f"LLM_PROVIDER={env_vars.get('LLM_PROVIDER', 'gemini')}\n")
-        f.write(f"OLLAMA_MODEL={env_vars.get('OLLAMA_MODEL', 'llama3.2:latest')}\n")
-        f.write(f"OLLAMA_BASE_URL={env_vars.get('OLLAMA_BASE_URL', 'http://localhost:11434')}\n")
+        f.write(f"OLLAMA_MODEL={env_vars.get('OLLAMA_MODEL', 'llama3.2:3b')}\n")
+        f.write(f"OLLAMA_BASE_URL={env_vars.get('OLLAMA_BASE_URL', 'http://20.20.20.186:11434')}\n")
         f.write(f"GEMINI_API_KEY={env_vars.get('GEMINI_API_KEY', '')}\n")
         f.write(f"GEMINI_MODEL={env_vars.get('GEMINI_MODEL', 'gemini-2.0-flash-exp')}\n\n")
         
@@ -122,47 +182,74 @@ def check_api_health():
 
 
 def get_worker_status():
-    """Get worker status from API"""
+    """Get worker status from API (requires auth)."""
     try:
-        response = requests.get(f"{API_BASE_URL}/worker/status", timeout=2)
+        response = requests.get(
+            f"{API_BASE_URL}/worker/status",
+            headers=get_auth_headers(),
+            timeout=2,
+        )
+        if handle_401(response):
+            return None
         if response.status_code == 200:
             return response.json()
         return None
-    except:
+    except Exception:
         return None
 
 
 def test_brevo_api(email):
-    """Test Brevo API"""
+    """Test Brevo API (requires auth)."""
     try:
         response = requests.post(
             f"{API_BASE_URL}/test-brevo",
             json={"email": email},
-            timeout=10
+            headers=get_auth_headers(),
+            timeout=10,
         )
-        return response.status_code, response.json()
+        if handle_401(response):
+            return 401, {"detail": "Session expired. Please log in again."}
+        try:
+            return response.status_code, response.json()
+        except Exception:
+            return response.status_code, {"error": response.text}
     except Exception as e:
         return 500, {"error": str(e)}
 
 
 def test_intent_detection(message_text, sender_email="test@example.com"):
-    """Test intent detection"""
+    """Test intent detection (requires auth)."""
     try:
         response = requests.post(
             f"{API_BASE_URL}/test-intent",
             json={"message_text": message_text, "sender_email": sender_email},
-            timeout=30
+            headers=get_auth_headers(),
+            timeout=30,
         )
-        return response.status_code, response.json()
+        if handle_401(response):
+            return 401, {"detail": "Session expired. Please log in again."}
+        try:
+            return response.status_code, response.json()
+        except Exception:
+            return response.status_code, {"error": response.text}
     except Exception as e:
         return 500, {"error": str(e)}
 
 
 def trigger_check_now():
-    """Trigger immediate email check"""
+    """Trigger immediate email check (requires auth)."""
     try:
-        response = requests.post(f"{API_BASE_URL}/worker/check-now", timeout=60)
-        return response.status_code, response.json()
+        response = requests.post(
+            f"{API_BASE_URL}/worker/check-now",
+            headers=get_auth_headers(),
+            timeout=60,
+        )
+        if handle_401(response):
+            return 401, {"detail": "Session expired. Please log in again."}
+        try:
+            return response.status_code, response.json()
+        except Exception:
+            return response.status_code, {"error": response.text}
     except Exception as e:
         return 500, {"error": str(e)}
 
@@ -193,237 +280,234 @@ def restart_api():
         return False, f"Error restarting API: {str(e)}"
 
 
-# Sidebar - Configuration
-with st.sidebar:
-    st.title("⚙️ Configuration")
-    
-    # Check API status
-    api_healthy, health_data = check_api_health()
-    
-    if api_healthy:
-        st.success("✅ API Running")
-        if 'services' in health_data:
-            worker = health_data['services'].get('email_worker', {})
-            if worker.get('running'):
-                st.info(f"🔄 Worker Active")
-            else:
-                st.warning(f"⏸️ Worker Disabled")
-    else:
-        st.error("❌ API Not Running")
-        st.caption("Run: `python main.py`")
-    
-    st.divider()
-    
-    # Load current config
-    current_env = load_env_file()
-    
-    st.subheader("📧 Email Account")
-    
-    # Determine default account based on current env provider
-    default_account_index = 0
-    current_provider = current_env.get('IMAP_PROVIDER', 'outlook')
-    if current_provider == 'rediff':
-        default_account_index = 0  # Cloudchillies (Rediff)
-    elif current_provider == 'outlook':
-        default_account_index = 1  # Lending Logic (Microsoft 365)
-    elif current_provider == 'gmail':
-        default_account_index = 2  # Gmail
-    
-    selected_account = st.selectbox(
-        "Select Account",
-        options=list(EMAIL_ACCOUNTS.keys()),
-        index=default_account_index,
-        help="Choose which email account to monitor"
-    )
-    
-    account_config = EMAIL_ACCOUNTS[selected_account]
-    
-    with st.expander("Email Settings", expanded=True):
-        imap_enabled = st.toggle(
-            "Enable IMAP Worker",
-            value=current_env.get('IMAP_ENABLED', 'false').lower() == 'true',
-            help="Enable hourly email checking"
-        )
-        
-        imap_email = st.text_input(
-            "Email Address",
-            value=current_env.get('IMAP_EMAIL', ''),
-            placeholder=account_config['email_placeholder']
-        )
-        
-        # Password field - only show for non-Graph API accounts
-        if selected_account == "Lending Logic (Microsoft 365)":
-            # Microsoft Graph API uses OAuth - no password needed
-            st.info("🔐 **Microsoft Graph API Authentication**\n\n"
-                   "This account uses OAuth 2.0 authentication via Azure AD. "
-                   "No password is required!\n\n"
-                   "✅ Configured via Azure Portal\n"
-                   "✅ Client ID, Secret & Tenant ID in .env file")
-            imap_password = ""  # No password needed
-        else:
-            # Other providers need password
-            imap_password = st.text_input(
-                "Password / App Password",
-                value=current_env.get('IMAP_PASSWORD', ''),
-                type="password",
-                help="Use App Password for Gmail. Regular password for Rediff."
-            )
-        
-        check_interval = st.number_input(
-            "Check Interval (seconds)",
-            min_value=60,
-            max_value=86400,
-            value=int(current_env.get('IMAP_CHECK_INTERVAL', '3600')),
-            step=300,
-            help="How often to check for new emails"
-        )
+# Sidebar - only visible after login (collapsed when on login page)
+api_healthy, health_data = check_api_health()
 
-        send_confirmation = st.toggle(
-            "Send Confirmation Email",
-            value=current_env.get('SEND_CONFIRMATION_EMAIL', 'false').lower() == 'true',
-            help="Send a confirmation email to the sender after successful unsubscribe"
-        )
-    
-    st.divider()
-    
-    st.subheader("🤖 LLM Provider")
-    
-    # Determine default LLM based on current env
-    current_llm_provider = current_env.get('LLM_PROVIDER', 'gemini')
-    default_llm_index = 0 if current_llm_provider == 'ollama' else 1
-    
-    selected_llm = st.selectbox(
-        "Select LLM",
-        options=list(LLM_PROVIDERS.keys()),
-        index=default_llm_index
-    )
-    
-    llm_config = LLM_PROVIDERS[selected_llm]
-    
-    with st.expander("LLM Settings", expanded=True):
-        if llm_config['provider'] == 'ollama':
-            ollama_url = st.text_input(
-                "Ollama Base URL",
-                value=current_env.get('OLLAMA_BASE_URL', 'http://localhost:11434')
-            )
-            ollama_model = st.text_input(
-                "Model Name",
-                value=current_env.get('OLLAMA_MODEL', 'llama3.2:latest')
-            )
-        else:
-            gemini_api_key = st.text_input(
-                "Gemini API Key",
-                value=current_env.get('GEMINI_API_KEY', ''),
-                type="password"
-            )
-            gemini_model = st.text_input(
-                "Model Name",
-                value=current_env.get('GEMINI_MODEL', 'gemini-2.0-flash-exp')
-            )
-    
-    st.divider()
-    
-    st.subheader("🔑 Brevo API")
-    
-    brevo_api_key = st.text_input(
-        "Brevo API Key",
-        value=current_env.get('BREVO_API_KEY', ''),
-        type="password"
-    )
-    
-    st.divider()
-    
-    # Save configuration
-    if st.button("💾 Save Configuration", type="primary", width='stretch'):
-        # Determine if we should use Graph API
-        use_graph_api = selected_account == "Lending Logic (Microsoft 365)"
-        
-        new_env = {
-            'BREVO_API_KEY': brevo_api_key,
-            'LLM_PROVIDER': llm_config['provider'],
-            'OLLAMA_MODEL': current_env.get('OLLAMA_MODEL', 'llama3.2:latest'),
-            'OLLAMA_BASE_URL': current_env.get('OLLAMA_BASE_URL', 'http://localhost:11434'),
-            'GEMINI_API_KEY': current_env.get('GEMINI_API_KEY', ''),
-            'GEMINI_MODEL': current_env.get('GEMINI_MODEL', 'gemini-2.0-flash-exp'),
-            'USE_GRAPH_API': 'true' if use_graph_api else 'false',
-            'GRAPH_TENANT_ID': current_env.get('GRAPH_TENANT_ID', ''),
-            'GRAPH_CLIENT_ID': current_env.get('GRAPH_CLIENT_ID', ''),
-            'GRAPH_CLIENT_SECRET': current_env.get('GRAPH_CLIENT_SECRET', ''),
-            'GRAPH_USER_EMAIL': imap_email if use_graph_api else current_env.get('GRAPH_USER_EMAIL', ''),
-            'IMAP_ENABLED': 'true' if imap_enabled else 'false',
-            'IMAP_PROVIDER': account_config['provider'],
-            'IMAP_HOST': account_config['host'],
-            'IMAP_PORT': str(account_config['port']),
-            'IMAP_EMAIL': imap_email,
-            'IMAP_PASSWORD': imap_password,
-            'IMAP_FOLDER': 'INBOX',
-            'IMAP_CHECK_INTERVAL': str(check_interval)
-        }
-        # Confirmation flag
-        new_env['SEND_CONFIRMATION_EMAIL'] = 'true' if send_confirmation else 'false'
-        
-        if llm_config['provider'] == 'ollama':
-            new_env['OLLAMA_BASE_URL'] = ollama_url
-            new_env['OLLAMA_MODEL'] = ollama_model
-        else:
-            new_env['GEMINI_API_KEY'] = gemini_api_key
-            new_env['GEMINI_MODEL'] = gemini_model
-        
-        save_env_file(new_env)
-        st.success("✅ Configuration saved!")
-        st.session_state['config_saved'] = True
-    
-    # Show restart button if config was saved
-    if st.session_state.get('config_saved', False):
+if st.session_state.get('access_token'):
+    with st.sidebar:
+        st.title("⚙️ Configuration")
+        st.success(f"✅ Logged in as **{st.session_state.get('user_email', '')}**")
+        st.caption(f"Role: {st.session_state.get('user_role', '')}")
+        if st.button("🚪 Log out", use_container_width=True):
+            logout()
+            st.rerun()
         st.divider()
-        st.warning("⚠️ Configuration changed - Restart required!")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🚀 Start Worker", width='stretch'):
-                with st.spinner("Starting worker..."):
-                    try:
-                        resp = requests.post(f"{API_BASE_URL}/worker/start", timeout=60)
-                        if resp.status_code == 200:
-                            st.success("✅ Worker start initiated")
-                            st.info("⏳ Waiting for worker to start...")
 
-                            # Wait for worker to report running
-                            for i in range(10):
-                                time.sleep(2)
-                                worker_status = get_worker_status()
-                                if worker_status and worker_status.get('running'):
-                                    st.success("✅ Worker is running!")
-                                    st.session_state['config_saved'] = False
-                                    st.rerun()
-                                    break
+        if api_healthy:
+            st.success("✅ API Running")
+            if 'services' in health_data:
+                worker = health_data['services'].get('email_worker', {})
+                if worker.get('running'):
+                    st.info("🔄 Worker Active")
+                else:
+                    st.warning("⏸️ Worker Disabled")
+        else:
+            st.error("❌ API Not Running")
+            st.caption("Run: `python main.py`")
+        st.divider()
+
+        # Load current config (Brevo & Ollama/Gemini details hidden from team)
+        current_env = load_env_file()
+
+        st.subheader("📧 Email Account")
+
+        # Determine default account based on current env provider
+        default_account_index = 0
+        current_provider = current_env.get('IMAP_PROVIDER', 'outlook')
+        if current_provider == 'rediff':
+            default_account_index = 0  # Cloudchillies (Rediff)
+        elif current_provider == 'outlook':
+            default_account_index = 1  # Lending Logic (Microsoft 365)
+        elif current_provider == 'gmail':
+            default_account_index = 2  # Gmail
+
+        selected_account = st.selectbox(
+            "Select Account",
+            options=list(EMAIL_ACCOUNTS.keys()),
+            index=default_account_index,
+            help="Choose which email account to monitor"
+        )
+
+        account_config = EMAIL_ACCOUNTS[selected_account]
+
+        with st.expander("Email Settings", expanded=True):
+            imap_enabled = st.toggle(
+                "Enable IMAP Worker",
+                value=current_env.get('IMAP_ENABLED', 'false').lower() == 'true',
+                help="Enable hourly email checking"
+            )
+
+            imap_email = st.text_input(
+                "Email Address",
+                value=current_env.get('IMAP_EMAIL', ''),
+                placeholder=account_config['email_placeholder']
+            )
+
+            # Password field - only show for non-Graph API accounts
+            if selected_account == "Lending Logic (Microsoft 365)":
+                # Microsoft Graph API uses OAuth - no password needed
+                st.info("🔐 **Microsoft Graph API Authentication**\n\n"
+                       "This account uses OAuth 2.0 authentication via Azure AD. "
+                       "No password is required!\n\n"
+                       "✅ Configured via Azure Portal\n"
+                       "✅ Client ID, Secret & Tenant ID in .env file")
+                imap_password = ""  # No password needed
+            else:
+                # Other providers need password
+                imap_password = st.text_input(
+                    "Password / App Password",
+                    value=current_env.get('IMAP_PASSWORD', ''),
+                    type="password",
+                    help="Use App Password for Gmail. Regular password for Rediff."
+                )
+
+            check_interval = st.number_input(
+                "Check Interval (seconds)",
+                min_value=60,
+                max_value=86400,
+                value=int(current_env.get('IMAP_CHECK_INTERVAL', '3600')),
+                step=300,
+                help="How often to check for new emails"
+            )
+
+            send_confirmation = st.toggle(
+                "Send Confirmation Email",
+                value=current_env.get('SEND_CONFIRMATION_EMAIL', 'false').lower() == 'true',
+                help="Send a confirmation email to the sender after successful unsubscribe"
+            )
+
+        st.divider()
+
+        # LLM/Brevo configured via .env by admin (hidden from team)
+        st.caption("🔒 LLM & Brevo are configured by admin in .env")
+
+        st.divider()
+
+        # Save configuration (only Email/IMAP; Brevo & LLM kept from current .env)
+        if st.button("💾 Save Configuration", type="primary", width='stretch'):
+            use_graph_api = selected_account == "Lending Logic (Microsoft 365)"
+            new_env = {
+                'BREVO_API_KEY': current_env.get('BREVO_API_KEY', ''),
+                'LLM_PROVIDER': current_env.get('LLM_PROVIDER', 'gemini'),
+                'OLLAMA_MODEL': current_env.get('OLLAMA_MODEL', 'llama3.2:latest'),
+                'OLLAMA_BASE_URL': current_env.get('OLLAMA_BASE_URL', 'http://localhost:11434'),
+                'GEMINI_API_KEY': current_env.get('GEMINI_API_KEY', ''),
+                'GEMINI_MODEL': current_env.get('GEMINI_MODEL', 'gemini-2.0-flash-exp'),
+                'USE_GRAPH_API': 'true' if use_graph_api else 'false',
+                'GRAPH_TENANT_ID': current_env.get('GRAPH_TENANT_ID', ''),
+                'GRAPH_CLIENT_ID': current_env.get('GRAPH_CLIENT_ID', ''),
+                'GRAPH_CLIENT_SECRET': current_env.get('GRAPH_CLIENT_SECRET', ''),
+                'GRAPH_USER_EMAIL': imap_email if use_graph_api else current_env.get('GRAPH_USER_EMAIL', ''),
+                'IMAP_ENABLED': 'true' if imap_enabled else 'false',
+                'IMAP_PROVIDER': account_config['provider'],
+                'IMAP_HOST': account_config['host'],
+                'IMAP_PORT': str(account_config['port']),
+                'IMAP_EMAIL': imap_email,
+                'IMAP_PASSWORD': imap_password,
+                'IMAP_FOLDER': 'INBOX',
+                'IMAP_CHECK_INTERVAL': str(check_interval),
+                'SEND_CONFIRMATION_EMAIL': 'true' if send_confirmation else 'false',
+            }
+
+            save_env_file(new_env)
+            st.success("✅ Configuration saved!")
+            st.session_state['config_saved'] = True
+
+        # Show restart button if config was saved
+        if st.session_state.get('config_saved', False):
+            st.divider()
+            st.warning("⚠️ Configuration changed - Restart required!")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("🚀 Start Worker", width='stretch'):
+                    with st.spinner("Starting worker..."):
+                        try:
+                            resp = requests.post(
+                                f"{API_BASE_URL}/worker/start",
+                                headers=get_auth_headers(),
+                                timeout=60,
+                            )
+                            if resp.status_code == 200:
+                                st.success("✅ Worker start initiated")
+                                st.info("⏳ Waiting for worker to start...")
+
+                                # Wait for worker to report running
+                                for i in range(10):
+                                    time.sleep(2)
+                                    worker_status = get_worker_status()
+                                    if worker_status and worker_status.get('running'):
+                                        st.success("✅ Worker is running!")
+                                        st.session_state['config_saved'] = False
+                                        st.rerun()
+                                        break
+                                else:
+                                    st.warning("⏳ Worker starting (may take a moment)")
                             else:
-                                st.warning("⏳ Worker starting (may take a moment)")
-                        else:
-                            try:
-                                error_text = resp.json()
-                            except Exception:
-                                error_text = resp.text
-                            st.error(f"❌ Error starting worker: {error_text}")
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-        
-        with col2:
-            if st.button("📝 Manual Restart", width='stretch'):
-                st.info("""
-                **Manual restart steps:**
-                1. Stop current API (Ctrl+C in terminal)
-                2. Run: `python main.py`
-                """)
-                if st.button("✅ Done - Clear Alert"):
-                    st.session_state['config_saved'] = False
-                    st.rerun()
+                                try:
+                                    error_text = resp.json()
+                                except Exception:
+                                    error_text = resp.text
+                                st.error(f"❌ Error starting worker: {error_text}")
+                        except Exception as e:
+                            st.error(f"❌ Error: {str(e)}")
+
+            with col2:
+                if st.button("📝 Manual Restart", width='stretch'):
+                    st.info("""
+                    **Manual restart steps:**
+                    1. Stop current API (Ctrl+C in terminal)
+                    2. Run: `python main.py`
+                    """)
+                    if st.button("✅ Done - Clear Alert"):
+                        st.session_state['config_saved'] = False
+                        st.rerun()
 
 
-# Main content
+# Main content - dedicated login page when not logged in, then redirect to app
+if not st.session_state.get('access_token'):
+    st.title("📧 Unsubscribe Email Workflow")
+    st.subheader("🔐 Sign in")
+    st.caption("Enter your credentials to access the dashboard, test intent, blocklist, and worker.")
+
+    # Centered login form using columns
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form", clear_on_submit=False):
+            login_email = st.text_input("Email", placeholder="admin@example.com", key="login_email")
+            login_password = st.text_input("Password", type="password", placeholder="••••••••", key="login_password")
+            submitted = st.form_submit_button("Log in")
+            if submitted:
+                if login_email and login_password:
+                    success, data = login_api(login_email, login_password)
+                    if success:
+                        st.session_state['access_token'] = data.get('access_token')
+                        st.session_state['user_email'] = login_email.strip().lower()
+                        try:
+                            me = requests.get(
+                                f"{API_BASE_URL}/auth/me",
+                                headers=get_auth_headers(),
+                                timeout=5,
+                            )
+                            if me.status_code == 200:
+                                st.session_state['user_role'] = me.json().get('role', '')
+                        except Exception:
+                            st.session_state['user_role'] = ''
+                        st.success("Logged in! Redirecting...")
+                        st.rerun()
+                    else:
+                        st.error(data if isinstance(data, str) else data.get("detail", data))
+                else:
+                    st.warning("Please enter email and password")
+
+    st.divider()
+    st.caption("Use the same email and password set in `.env` as ADMIN_SEED_EMAIL and ADMIN_SEED_PASSWORD.")
+    st.stop()
+
+# Main content (logged in) - app dashboard
 st.title("📧 Unsubscribe Email Workflow")
-st.caption("Automated email unsubscribe processing with LLM intent detection")
+st.caption(f"Logged in as **{st.session_state.get('user_email')}** · Automated email unsubscribe processing with LLM intent detection")
 
 # Create tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🧪 Test Intent", "✉️ Test Brevo", "📋 Blocklist", "📝 Logs"])
@@ -587,7 +671,14 @@ with tab4:
     
     # Fetch statistics
     try:
-        stats_response = requests.get(f"{API_BASE_URL}/blocklist/stats", timeout=5)
+        stats_response = requests.get(
+            f"{API_BASE_URL}/blocklist/stats",
+            headers=get_auth_headers(),
+            timeout=5,
+        )
+        if handle_401(stats_response):
+            st.error("Session expired. Please log in again.")
+            st.stop()
         if stats_response.status_code == 200:
             stats_data = stats_response.json()
             stats = stats_data.get('stats', {})
@@ -629,7 +720,14 @@ with tab4:
                 limit = st.selectbox("Show entries", [10, 25, 50, 100], index=2)
             
             # Fetch recent logs
-            recent_response = requests.get(f"{API_BASE_URL}/blocklist/recent?limit={limit}", timeout=5)
+            recent_response = requests.get(
+                f"{API_BASE_URL}/blocklist/recent?limit={limit}",
+                headers=get_auth_headers(),
+                timeout=5,
+            )
+            if handle_401(recent_response):
+                st.error("Session expired. Please log in again.")
+                st.stop()
             if recent_response.status_code == 200:
                 recent_data = recent_response.json()
                 logs = recent_data.get('logs', [])
@@ -662,7 +760,8 @@ with tab4:
                             with st.spinner("Generating CSV export..."):
                                 export_response = requests.get(
                                     f"{API_BASE_URL}/blocklist/export?successful_only=true",
-                                    timeout=10
+                                    headers=get_auth_headers(),
+                                    timeout=10,
                                 )
                                 if export_response.status_code == 200:
                                     st.success("✅ Export completed! Download starting...")
@@ -682,7 +781,8 @@ with tab4:
                         if search_email:
                             search_response = requests.get(
                                 f"{API_BASE_URL}/blocklist/search/{search_email}",
-                                timeout=5
+                                headers=get_auth_headers(),
+                                timeout=5,
                             )
                             if search_response.status_code == 200:
                                 search_data = search_response.json()
@@ -718,7 +818,8 @@ with tab4:
                             try:
                                 clear_response = requests.post(
                                     f"{API_BASE_URL}/blocklist/clear",
-                                    timeout=30
+                                    headers=get_auth_headers(),
+                                    timeout=30,
                                 )
                                 if clear_response.status_code == 200:
                                     clear_data = clear_response.json()
@@ -763,4 +864,4 @@ with col2:
         st.rerun()
 
 with col3:
-    st.caption("Made with ❤️ using Streamlit")
+    st.caption("Powered by MindRuby Technologies - @piyushchourey")

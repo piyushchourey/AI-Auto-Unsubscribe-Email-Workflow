@@ -27,7 +27,8 @@ class DatabaseService:
         brevo_message: Optional[str] = None,
         email_subject: Optional[str] = None,
         message_text: Optional[str] = None,
-        source: str = "webhook"
+        source: str = "webhook",
+        performed_by_user_id: Optional[int] = None,
     ) -> UnsubscribeLog:
         """
         Log an unsubscribe action to the database
@@ -43,6 +44,7 @@ class DatabaseService:
             email_subject: Subject of the email
             message_text: Email message text (will be truncated)
             source: Source of the request (webhook/worker/manual)
+            performed_by_user_id: ID of logged-in user who triggered the action (if any)
             
         Returns:
             UnsubscribeLog: The created log entry
@@ -66,6 +68,7 @@ class DatabaseService:
                 email_subject=email_subject,
                 email_snippet=email_snippet,
                 source=source,
+                performed_by_user_id=performed_by_user_id,
                 created_at=datetime.utcnow()
             )
             

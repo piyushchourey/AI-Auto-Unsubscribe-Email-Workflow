@@ -29,3 +29,28 @@ class UnsubscribeResponse(BaseModel):
     unsubscribe_intent_detected: bool
     unsubscribed_from_brevo: bool = False
     details: Optional[dict] = None
+
+
+# --- Auth models ---
+
+
+class LoginRequest(BaseModel):
+    """Request body for login."""
+    email: str = Field(..., description="User email")
+    password: str = Field(..., description="Password", min_length=1)
+
+
+class TokenResponse(BaseModel):
+    """Response with access token."""
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = Field(..., description="Seconds until token expiry")
+
+
+class UserResponse(BaseModel):
+    """Current user info (no sensitive data)."""
+    id: int
+    email: str
+    role: str
+    is_active: bool
+    created_at: Optional[str] = None

@@ -159,6 +159,29 @@ IMAP_PASSWORD=your_password
 
 ## 🎯 Running the Application
 
+### Login → Unsubscribe process (required for protected endpoints)
+
+Unsubscribe, blocklist, and worker endpoints **require login**. Use this flow:
+
+1. **One-time:** In `.env`, set auth and seed admin:
+   ```env
+   JWT_SECRET_KEY=your-secret-at-least-32-chars
+   ADMIN_SEED_EMAIL=admin@example.com
+   ADMIN_SEED_PASSWORD=YourSecurePassword123
+   ```
+2. **Start the API** (see below). On first run, the app creates the admin user if none exist.
+3. **Login:** `POST http://localhost:8000/auth/login` with body `{"email":"admin@example.com","password":"YourSecurePassword123"}` → copy `access_token`.
+4. **Call protected endpoints** with header: `Authorization: Bearer <access_token>`  
+   - Process email: `POST /inbound-email`  
+   - Test intent: `POST /test-intent`  
+   - Test Brevo: `POST /test-brevo`  
+   - Blocklist: `GET /blocklist/stats`, `/blocklist/recent`, etc.  
+   - Worker: `GET /worker/status`, `POST /worker/start`, etc.
+
+**Or use the Streamlit UI:** Run `streamlit run streamlit_app.py`, then log in with the same admin email/password in the sidebar to use the full dashboard, test intent, blocklist, and worker from the UI.
+
+📘 **Step-by-step with examples:** [docs/RUN_LOGIN_UNSUBSCRIBE.md](docs/RUN_LOGIN_UNSUBSCRIBE.md)
+
 ### Start the API Server
 
 ```bash
