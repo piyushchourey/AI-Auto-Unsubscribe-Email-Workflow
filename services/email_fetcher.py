@@ -4,21 +4,21 @@ import email.utils
 from email.header import decode_header
 from typing import List, Dict
 from imapclient import IMAPClient
-from config import settings
+import config
 
 
 class EmailFetcher:
     """Service for fetching emails from any IMAP-compatible email provider"""
-    
+
     def __init__(self):
-        """Initialize IMAP connection settings"""
-        # Use Pydantic settings attributes directly
-        self.host = settings.imap_host
-        self.port = settings.imap_port
-        self.email = settings.imap_email
-        self.password = settings.imap_password
-        self.folder = settings.imap_folder
-        self.provider = settings.imap_provider
+        """Initialize IMAP connection settings (reads current config at init)."""
+        s = config.settings
+        self.host = s.imap_host
+        self.port = s.imap_port
+        self.email = s.imap_email
+        self.password = s.imap_password
+        self.folder = s.imap_folder
+        self.provider = s.imap_provider
         
         # Validate configuration
         if not self.host:

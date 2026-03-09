@@ -6,7 +6,7 @@ import requests
 from typing import List, Dict, Optional
 from datetime import datetime
 import msal
-from config import settings
+import config
 
 
 class GraphEmailFetcher:
@@ -14,10 +14,11 @@ class GraphEmailFetcher:
     
     def __init__(self):
         """Initialize Graph API client"""
-        self.tenant_id = settings.graph_tenant_id
-        self.client_id = settings.graph_client_id
-        self.client_secret = settings.graph_client_secret
-        self.user_email = settings.graph_user_email
+        s = config.settings
+        self.tenant_id = s.graph_tenant_id
+        self.client_id = s.graph_client_id
+        self.client_secret = s.graph_client_secret
+        self.user_email = s.graph_user_email
         
         # MSAL (Microsoft Authentication Library) client
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"

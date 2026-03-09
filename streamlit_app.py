@@ -361,6 +361,17 @@ if st.session_state.get('access_token'):
                     help="Use App Password for Gmail. Regular password for Rediff."
                 )
 
+            # Folder to monitor: Inbox (unsubscribe requests) or Trash (undelivered/bounce)
+            current_folder = current_env.get('IMAP_FOLDER', 'INBOX').strip()
+            folder_options = ["INBOX", "Trash"]
+            folder_index = 1 if current_folder.upper() == "TRASH" else 0
+            imap_folder = st.selectbox(
+                "Email folder to check",
+                options=folder_options,
+                index=folder_index,
+                help="INBOX: unsubscribe requests. Trash: undelivered/bounce emails (block sender in Brevo, track in DB)."
+            )
+
             check_interval = st.number_input(
                 "Check Interval (seconds)",
                 min_value=60,
@@ -404,7 +415,7 @@ if st.session_state.get('access_token'):
                 'IMAP_PORT': str(account_config['port']),
                 'IMAP_EMAIL': imap_email,
                 'IMAP_PASSWORD': imap_password,
-                'IMAP_FOLDER': 'INBOX',
+                'IMAP_FOLDER': imap_folder,
                 'IMAP_CHECK_INTERVAL': str(check_interval),
                 'SEND_CONFIRMATION_EMAIL': 'true' if send_confirmation else 'false',
             }

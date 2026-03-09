@@ -1,6 +1,8 @@
 import os
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+from dotenv import load_dotenv
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
@@ -60,5 +62,17 @@ class Settings(BaseSettings):
     admin_seed_password: str = Field(default="", validation_alias="ADMIN_SEED_PASSWORD")
 
 
-# Create settings instance
+# Create settings instance (loaded once at import)
 settings = Settings()
+
+
+def reload_settings() -> Settings:
+    """
+    Re-read .env from disk and refresh the global settings.
+    Call this before worker runs or when "Check email now" is used so the latest
+    saved configuration (e.g. IMAP_FOLDER, IMAP_CHECK_INTERVAL) is used.
+    """
+    global settings
+    load_dotenv(Path(".env").resolve(), override=True)
+    settings = Settings()
+    return settings

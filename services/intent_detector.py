@@ -15,6 +15,7 @@ class IntentDetector:
         """Initialize the LLM based on configuration"""
         self.llm = self._initialize_llm()
         self.prompt_template = self._create_prompt_template()
+        self.undelivered_subject_prompt = self._create_undelivered_subject_prompt()
         
     def _initialize_llm(self):
         """Initialize the appropriate LLM provider"""
@@ -80,6 +81,102 @@ Do not include any additional text outside the JSON.
             input_variables=["message_text"],
             template=template.strip()
         )
+
+    def _create_undelivered_subject_prompt(self) -> PromptTemplate:
+        """Create prompt for detecting undelivered/bounce/delay from subject line only."""
+        template = """
+You are an email subject classifier. Your task is to decide if an email SUBJECT LINE
+indicates that the message is about undelivered mail, delivery failure, bounce, or delivery status (delay/unsuccessful).
+
+Examples of subjects that SHOULD be classified as undelivered/delivery-failure:
+- "Not delivered"
+- "[SUSPECTIVE] Unfulfilled: [External]"
+- "Failure to Deliver Emails"
+- "Failure to Deliver Messages"
+- "Notification of the Delivery Status (Delay)"
+- "Notification of Delivery Status (Unsuccessful)"
+- "Delivery has failed"
+- "Undeliverable message"
+- "Mail delivery failed"
+- "Returned mail: see transcript for details"
+- Any similar phrasing about non-delivery, bounce, delay, failure notice, bounce notice or delivery status.
+
+Classify as TRUE only if the subject clearly indicates undelivered mail / delivery failure / bounce / delay notice.
+Classify as FALSE for normal subjects (newsletters, receipts, conversations, etc.).
+
+Subject line to classify:
+----------------
+{subject}
+----------------
+
+Respond ONLY with valid JSON in this exact format:
+{{
+    "has_undelivered_sentiment": true or false,
+    "confidence": "high" or "medium" or "low",
+    "reasoning": "Brief explanation."
+}}
+
+Do not include any additional text outside the JSON.
+"""
+        return PromptTemplate(
+            input_variables=["subject"],
+            template=template.strip()
+        )
+
+    def _parse_undelivered_json(self, raw: str) -> Optional[Dict]:
+        """Parse LLM response for undelivered subject (has_undelivered_sentiment, confidence, reasoning)."""
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        for suffix in ('}', '"}', '"}\n}'):
+            try:
+                return json.loads(text + suffix)
+            except json.JSONDecodeError:
+                continue
+        intent_match = re.search(
+            r'"has_undelivered_sentiment"\s*:\s*(true|false)',
+            text,
+            re.IGNORECASE
+        )
+        confidence_match = re.search(
+            r'"confidence"\s*:\s*"(high|medium|low)"',
+            text,
+            re.IGNORECASE
+        )
+        reasoning_match = re.search(
+            r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)',
+            text,
+            re.DOTALL
+        )
+        if intent_match:
+            return {
+                "has_undelivered_sentiment": intent_match.group(1).lower() == "true",
+                "confidence": confidence_match.group(1).lower() if confidence_match else "low",
+                "reasoning": (reasoning_match.group(1).replace('\\"', '"') if reasoning_match else "") or "",
+            }
+        return None
+
+    # Fallback subject patterns when LLM is unavailable (same as in email_worker)
+    _UNDELIVERED_SUBJECT_PATTERNS = (
+        "not delivered",
+        "[suspective] unfulfilled: [external]",
+        "failure to deliver emails",
+        "failure to deliver messages",
+        "notification of the delivery status (delay)",
+        "notification of delivery status (delay)",
+        "notification of delivery status (unsuccessful)",
+    )
+
+    def _fallback_undelivered_subject(self, subject: str) -> bool:
+        """Keyword fallback when LLM fails for subject classification."""
+        if not subject or not subject.strip():
+            return False
+        lower = subject.strip().lower()
+        return any(phrase in lower for phrase in self._UNDELIVERED_SUBJECT_PATTERNS)
 
     def _parse_llm_json(self, raw: str) -> Optional[Dict]:
         """
@@ -211,6 +308,49 @@ Do not include any additional text outside the JSON.
             print("Error during intent detection:", e)
             print(result_text or "(response not available)")
             return self._fallback_detection(message_text)
+
+    async def detect_undelivered_from_subject(self, subject: str) -> tuple[bool, str, str]:
+        """
+        Use LLM to detect if the subject line indicates undelivered/bounce/delay (subject-only sentiment).
+        Returns (has_undelivered_sentiment, confidence, reasoning).
+        Falls back to keyword matching if LLM fails.
+        """
+        if not subject or not subject.strip():
+            return False, "low", "Empty subject"
+        result_text = ""
+        try:
+            prompt = self.undelivered_subject_prompt.format(subject=subject.strip())
+            result = await self.llm.ainvoke(prompt)
+            if hasattr(result, "content"):
+                result_text = result.content
+            else:
+                result_text = str(result)
+            if result_text is None:
+                result_text = ""
+            text = result_text.strip()
+            if not text.startswith("{"):
+                start_idx = text.find("{")
+                end_idx = text.rfind("}")
+                if start_idx != -1 and end_idx != -1:
+                    text = text[start_idx : end_idx + 1]
+            parsed = self._parse_undelivered_json(text)
+            if parsed is not None and "has_undelivered_sentiment" in parsed:
+                has_it = bool(parsed["has_undelivered_sentiment"])
+                conf = parsed.get("confidence", "low")
+                if conf not in ("high", "medium", "low"):
+                    conf = "low"
+                reason = str(parsed.get("reasoning", ""))
+                return has_it, conf, reason or "LLM subject classification"
+        except Exception as e:
+            print("Error during undelivered subject detection:", e)
+            print(result_text or "(no response)")
+        # Fallback to keyword matching
+        has_fallback = self._fallback_undelivered_subject(subject)
+        return (
+            has_fallback,
+            "medium" if has_fallback else "low",
+            "Fallback keyword matching used due to LLM error",
+        )
     
     def _fallback_detection(self, message_text: str) -> UnsubscribeIntentResponse:
         """Fallback keyword-based detection if LLM fails"""
