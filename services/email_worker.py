@@ -9,6 +9,7 @@ from services.graph_email_fetcher import GraphEmailFetcher
 from services.intent_detector import IntentDetector
 from services.brevo_service import BrevoService
 from services.email_sender import EmailSender
+from services.bounce_parser import extract_failed_recipient_from_bounce
 
 class EmailWorker:
     """Background worker that processes emails from IMAP mailbox every hour"""
@@ -77,7 +78,10 @@ class EmailWorker:
             'reply_sent': False,
             'error': None
         }
-        
+
+        # Default: block/store the sender. For Trash/bounce we may replace with extracted failed recipient.
+        email_to_block = sender_email
+
         try:
             # When monitoring Trash: use LLM to detect undelivered/bounce sentiment from subject only
             folder = (config.settings.imap_folder or "").strip().upper()
@@ -108,7 +112,27 @@ class EmailWorker:
             result['unsubscribe_intent_detected'] = intent_result.has_unsubscribe_intent
             result['confidence'] = intent_result.confidence
             result['reasoning'] = intent_result.reasoning
-            
+
+            # For Trash/bounce: use actual failed recipient (from body) for block/store, not bounce sender
+            if folder == "TRASH" and intent_result.has_unsubscribe_intent:
+                # Prefer LLM extraction for correctness; fall back to regex if LLM returns nothing
+                extracted = await self.intent_detector.extract_failed_recipient_from_bounce_body(
+                    body=message_text,
+                    subject=subject,
+                    bounce_sender=sender_email,
+                )
+                if not extracted:
+                    extracted = extract_failed_recipient_from_bounce(
+                        body=message_text,
+                        subject=subject,
+                        bounce_sender=sender_email,
+                    )
+                if extracted:
+                    email_to_block = extracted
+                    print(f"📬 Extracted failed recipient from bounce body: {email_to_block} (bounce from: {sender_email})")
+                else:
+                    print(f"📬 No failed recipient found in body; using bounce sender: {sender_email}")
+
             print(f"🎯 Intent detected: {intent_result.has_unsubscribe_intent}")
             print(f"🎲 Confidence: {result['confidence']}")
             print(f"💭 Reasoning: {result['reasoning']}")
@@ -116,13 +140,13 @@ class EmailWorker:
             # Step 2: Process with Brevo if unsubscribe intent detected
             if intent_result.has_unsubscribe_intent:
                 print(f"🚫 Unsubscribe intent detected! Processing with Brevo...")
-                brevo_result = await self.brevo_service.unsubscribe_contact(sender_email)
-                
+                brevo_result = await self.brevo_service.unsubscribe_contact(email_to_block)
+
                 result['unsubscribed_from_brevo'] = brevo_result['success']
                 result['brevo_details'] = brevo_result
-                
+
                 if brevo_result['success']:
-                    print(f"✅ Successfully unsubscribed {sender_email} from Brevo")
+                    print(f"✅ Successfully unsubscribed {email_to_block} from Brevo")
                     
                     # Step 3: Send confirmation email (skip for Trash/bounce - sender is mailer-daemon)
                     if log_source != "trash" and config.settings.send_confirmation_email:
@@ -165,11 +189,11 @@ class EmailWorker:
             else:
                 print(f"ℹ️ No unsubscribe intent detected - no action taken")
             
-            # Step 3: Log to database
+            # Step 3: Log to database (use email_to_block so Trash logs the actual user, not bounce sender)
             if self.db_service:
                 try:
                     self.db_service.log_unsubscribe_action(
-                        email=sender_email,
+                        email=email_to_block,
                         intent_detected=intent_result.has_unsubscribe_intent,
                         brevo_success=result.get('unsubscribed_from_brevo', False),
                         intent_confidence=intent_result.confidence,

@@ -16,6 +16,7 @@ class IntentDetector:
         self.llm = self._initialize_llm()
         self.prompt_template = self._create_prompt_template()
         self.undelivered_subject_prompt = self._create_undelivered_subject_prompt()
+        self.extract_failed_recipient_prompt = self._create_extract_failed_recipient_prompt()
         
     def _initialize_llm(self):
         """Initialize the appropriate LLM provider"""
@@ -120,6 +121,41 @@ Do not include any additional text outside the JSON.
 """
         return PromptTemplate(
             input_variables=["subject"],
+            template=template.strip()
+        )
+
+    def _create_extract_failed_recipient_prompt(self) -> PromptTemplate:
+        """Create prompt to extract the failed recipient email from bounce/undelivered message body."""
+        template = """
+You are parsing a bounce or undelivered email message. Your task is to find the ONE email address
+that is the FAILED RECIPIENT — i.e. the actual user/address that could not receive the message
+(whose delivery failed), NOT the sender of this bounce notice (e.g. MAILER-DAEMON, postmaster).
+
+Look for:
+- The address that delivery "failed" for or was "undeliverable" to
+- Final-Recipient, Original-Recipient, or similar headers in the body
+- Phrases like "delivery to X failed", "could not be delivered to X", "recipient X"
+- The address that should be blocked so we stop sending to it
+
+RULES:
+- Return ONLY the failed recipient's email address (e.g. user@example.com), nothing else.
+- Do NOT return the bounce sender (e.g. MAILER-DAEMON@..., postmaster@..., noreply@...).
+- If you cannot identify exactly one clear failed recipient, return the word "NONE".
+- Output must be valid JSON: {{ "failed_recipient_email": "user@example.com" }} or {{ "failed_recipient_email": "NONE" }}
+
+Bounce message (subject and body):
+----------------
+Subject: {subject}
+
+Body:
+{body}
+----------------
+
+Respond ONLY with this JSON (no other text):
+{{ "failed_recipient_email": "the actual email or NONE" }}
+"""
+        return PromptTemplate(
+            input_variables=["subject", "body"],
             template=template.strip()
         )
 
@@ -308,6 +344,74 @@ Do not include any additional text outside the JSON.
             print("Error during intent detection:", e)
             print(result_text or "(response not available)")
             return self._fallback_detection(message_text)
+
+    def _is_valid_failed_recipient(self, email: str, bounce_sender: str) -> bool:
+        """Return True if extracted email looks like a real recipient to block, not system/bounce sender."""
+        if not email or not isinstance(email, str):
+            return False
+        email = email.strip().lower()
+        if email in ("none", ""):
+            return False
+        if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", email):
+            return False
+        if bounce_sender and email == bounce_sender.strip().lower():
+            return False
+        system = ("postmaster", "mailer-daemon", "noreply", "no-reply", "donotreply", "bounce", "null@")
+        if any(s in email for s in system):
+            return False
+        return True
+
+    async def extract_failed_recipient_from_bounce_body(
+        self,
+        body: str,
+        subject: str = "",
+        bounce_sender: str = "",
+    ) -> Optional[str]:
+        """
+        Use LLM to extract the actual failed recipient email from a bounce/undelivered message body.
+        Returns the email to block, or None if not found / invalid / LLM failed.
+        """
+        if not (body or subject):
+            return None
+        result_text = ""
+        try:
+            prompt = self.extract_failed_recipient_prompt.format(
+                subject=(subject or "").strip(),
+                body=(body or "").strip()[:4000],
+            )
+            result = await self.llm.ainvoke(prompt)
+            if hasattr(result, "content"):
+                result_text = result.content
+            else:
+                result_text = str(result)
+            if not result_text:
+                return None
+            text = result_text.strip()
+            if not text.startswith("{"):
+                start_idx = text.find("{")
+                end_idx = text.rfind("}")
+                if start_idx != -1 and end_idx != -1:
+                    text = text[start_idx : end_idx + 1]
+            parsed = json.loads(text)
+            raw = (parsed.get("failed_recipient_email") or "").strip()
+            if not raw or str(raw).upper() == "NONE":
+                return None
+            email = str(raw).strip()
+            if self._is_valid_failed_recipient(email, bounce_sender):
+                return email
+            return None
+        except json.JSONDecodeError:
+            # Try to extract email from malformed JSON (e.g. "failed_recipient_email": "user@example.com")
+            match = re.search(r'"failed_recipient_email"\s*:\s*"([^"]+)"', result_text)
+            if match:
+                email = match.group(1).strip()
+                if self._is_valid_failed_recipient(email, bounce_sender) and email.upper() != "NONE":
+                    return email
+            return None
+        except Exception as e:
+            print("Error during LLM failed-recipient extraction:", e)
+            print(result_text[:200] if result_text else "(no response)")
+            return None
 
     async def detect_undelivered_from_subject(self, subject: str) -> tuple[bool, str, str]:
         """
