@@ -626,7 +626,7 @@ with tab4:
                 st.subheader("📋 Recent Blocklist Entries")
             
             with col2:
-                limit = st.selectbox("Show entries", [10, 25, 50, 100], index=2)
+                limit = st.selectbox("Show entries", [10, 25, 50, 100, 500], index=2)
             
             # Fetch recent logs
             recent_response = requests.get(f"{API_BASE_URL}/blocklist/recent?limit={limit}", timeout=5)
