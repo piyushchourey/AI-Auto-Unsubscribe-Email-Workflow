@@ -83,10 +83,10 @@ class EmailWorker:
         email_to_block = sender_email
 
         try:
-            # When monitoring Trash: use LLM to detect undelivered/bounce sentiment from subject only
-            folder = (config.settings.imap_folder or "").strip().upper()
-            if folder == "TRASH":
-                print("📬 Trash folder: checking subject sentiment for undelivered/bounce...")
+            # Which process to run: "undelivered" (bounce detection + block failed recipient) or "unsubscribe" (intent from body)
+            process_mode = (config.settings.email_process_mode or "unsubscribe").strip().lower()
+            if process_mode == "undelivered":
+                print("📬 Process: Undelivered email — checking subject sentiment for bounce/undelivered...")
                 has_undelivered, confidence, reasoning = await self.intent_detector.detect_undelivered_from_subject(subject)
                 if has_undelivered:
                     print("📬 Undelivered/bounce subject detected (LLM or fallback)")
@@ -95,26 +95,26 @@ class EmailWorker:
                         confidence=confidence,
                         reasoning=reasoning,
                     )
-                    log_source = "trash"
+                    log_source = "undelivered"
                 else:
                     intent_result = SimpleNamespace(
                         has_unsubscribe_intent=False,
                         confidence=confidence,
                         reasoning=reasoning or "No undelivered sentiment in subject",
                     )
-                    log_source = "trash"
+                    log_source = "undelivered"
             else:
-                # Step 1: Detect unsubscribe intent (LLM or normal flow)
-                print("🤖 Analyzing intent with LLM...")
+                # Process: Unsubscribe — detect unsubscribe intent from message body
+                print("🤖 Process: Unsubscribe — analyzing intent with LLM...")
                 intent_result = await self.intent_detector.detect_intent(message_text)
                 log_source = "worker"
-            
+
             result['unsubscribe_intent_detected'] = intent_result.has_unsubscribe_intent
             result['confidence'] = intent_result.confidence
             result['reasoning'] = intent_result.reasoning
 
-            # For Trash/bounce: use actual failed recipient (from body) for block/store, not bounce sender
-            if folder == "TRASH" and intent_result.has_unsubscribe_intent:
+            # For undelivered process: use actual failed recipient (from body) for block/store, not bounce sender
+            if process_mode == "undelivered" and intent_result.has_unsubscribe_intent:
                 # Prefer LLM extraction for correctness; fall back to regex if LLM returns nothing
                 extracted = await self.intent_detector.extract_failed_recipient_from_bounce_body(
                     body=message_text,
@@ -148,8 +148,8 @@ class EmailWorker:
                 if brevo_result['success']:
                     print(f"✅ Successfully unsubscribed {email_to_block} from Brevo")
                     
-                    # Step 3: Send confirmation email (skip for Trash/bounce - sender is mailer-daemon)
-                    if log_source != "trash" and config.settings.send_confirmation_email:
+                    # Step 3: Send confirmation email (skip for undelivered - sender is typically mailer-daemon)
+                    if log_source != "undelivered" and config.settings.send_confirmation_email:
                         print(f"📧 Sending confirmation email to {sender_email}...")
 
                         if self.use_graph_api and message_id:

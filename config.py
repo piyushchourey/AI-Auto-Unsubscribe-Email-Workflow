@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     imap_password: str = Field(default="", validation_alias="IMAP_PASSWORD")
     imap_folder: str = Field(default="INBOX", validation_alias="IMAP_FOLDER")
     imap_check_interval: int = Field(default=3600, validation_alias="IMAP_CHECK_INTERVAL")
+    # Which process to run: "unsubscribe" (detect unsubscribe intent from body) or "undelivered" (detect bounces from subject, block failed recipient)
+    email_process_mode: str = Field(default="unsubscribe", validation_alias="EMAIL_PROCESS_MODE")
 
     # Confirmation email behavior
     # If true, send a confirmation email to the sender after a successful Brevo unsubscribe

@@ -141,10 +141,10 @@ _ENV_KNOWN_KEYS = [
     "LLM_PROVIDER", "OLLAMA_MODEL", "OLLAMA_BASE_URL", "GEMINI_API_KEY", "GEMINI_MODEL",
     "USE_GRAPH_API", "GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "GRAPH_USER_EMAIL",
     "IMAP_ENABLED", "IMAP_PROVIDER", "IMAP_HOST", "IMAP_PORT", "IMAP_EMAIL", "IMAP_PASSWORD",
-    "IMAP_FOLDER", "IMAP_CHECK_INTERVAL", "SEND_CONFIRMATION_EMAIL",
+    "IMAP_FOLDER", "EMAIL_PROCESS_MODE", "IMAP_CHECK_INTERVAL", "SEND_CONFIRMATION_EMAIL",
     "JWT_SECRET_KEY", "JWT_ALGORITHM", "ACCESS_TOKEN_EXPIRE_MINUTES", "LOGIN_RATE_LIMIT_PER_MINUTE",
     "ADMIN_SEED_EMAIL", "ADMIN_SEED_PASSWORD",
-    "HOST", "PORT", "DATABASE_URL",
+    "HOST", "PORT", "DATABASE_URL", "EMAIL_PROCESS_MODE",
 ]
 
 
@@ -365,7 +365,7 @@ if st.session_state.get('access_token'):
                     help="Use App Password for Gmail. Regular password for Rediff."
                 )
 
-            # Folder to monitor: Inbox (unsubscribe requests) or Trash (undelivered/bounce)
+            # Folder to monitor (where to fetch emails from)
             current_folder = current_env.get('IMAP_FOLDER', 'INBOX').strip()
             folder_options = ["INBOX", "Trash"]
             folder_index = 1 if current_folder.upper() == "TRASH" else 0
@@ -373,8 +373,20 @@ if st.session_state.get('access_token'):
                 "Email folder to check",
                 options=folder_options,
                 index=folder_index,
-                help="INBOX: unsubscribe requests. Trash: undelivered/bounce emails (block sender in Brevo, track in DB)."
+                help="Which mailbox folder to read (INBOX or Trash)."
             )
+
+            # Process/feature: which logic to run on each email (independent of folder)
+            current_mode = current_env.get('EMAIL_PROCESS_MODE', 'unsubscribe').strip().lower()
+            process_options = ["Unsubscribe", "Undelivered email"]
+            process_index = 1 if current_mode == "undelivered" else 0
+            process_mode_display = st.selectbox(
+                "Process to run",
+                options=process_options,
+                index=process_index,
+                help="Unsubscribe: detect unsubscribe intent from message body, block sender. Undelivered email: detect bounce/undelivered from subject, extract failed recipient from body, block that address."
+            )
+            email_process_mode = "undelivered" if process_mode_display == "Undelivered email" else "unsubscribe"
 
             check_interval = st.number_input(
                 "Check Interval (seconds)",
@@ -420,6 +432,7 @@ if st.session_state.get('access_token'):
                 'IMAP_EMAIL': imap_email,
                 'IMAP_PASSWORD': imap_password,
                 'IMAP_FOLDER': imap_folder,
+                'EMAIL_PROCESS_MODE': email_process_mode,
                 'IMAP_CHECK_INTERVAL': str(check_interval),
                 'SEND_CONFIRMATION_EMAIL': 'true' if send_confirmation else 'false',
             }
